@@ -1,0 +1,16 @@
+name = "vendas-externas-api"
+main = "src/index.ts"
+compatibility_date = "2025-12-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "vendas_pro"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+[[r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "vendas-pro-backups"
+
+[vars]
+# Coloque como Secret:
+# wrangler secret put JWT_SECRET
