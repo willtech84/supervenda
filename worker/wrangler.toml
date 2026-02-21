@@ -5,7 +5,7 @@ compatibility_date = "2025-12-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "vendas_pro"
-database_id = "REPLACE_WITH_YOUR_D1_ID"
+database_id = "102413e6-5a14-4668-97e9-4a66ad5e58ea"
 
 [[r2_buckets]]
 binding = "BACKUPS"
