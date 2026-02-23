@@ -6,30 +6,29 @@ export interface Env {
 
 type JsonValue = Record<string, unknown>;
 
-const corsHeaders = {
+const cors = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
   "access-control-allow-headers": "content-type,authorization",
 };
 
+function withCors(res: Response) {
+  const h = new Headers(res.headers);
+  for (const [k, v] of Object.entries(cors)) h.set(k, v);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
+}
+
 const json = (data: unknown, status = 200) =>
-  new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      ...corsHeaders,
-    },
-  });
+  withCors(
+    new Response(JSON.stringify(data), {
+      status,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    })
+  );
 
 const bad = (error: string, status = 400) => json({ error }, status);
 
-const nowISO = () => new Date().toISOString();
-
-function parts(url: string): string[] {
-  return new URL(url).pathname.split("/").filter(Boolean);
-}
-
-async function readJson(req: Request): Promise<any> {
+async function readJson(req: Request) {
   const ct = req.headers.get("content-type") || "";
   if (!ct.includes("application/json")) return {};
   try {
@@ -38,6 +37,97 @@ async function readJson(req: Request): Promise<any> {
     return {};
   }
 }
+
+export default {
+  async fetch(req: Request, env: any): Promise<Response> {
+    try {
+      // Preflight CORS
+      if (req.method === "OPTIONS") {
+        return withCors(new Response(null, { status: 204 }));
+      }
+
+      const p = new URL(req.url).pathname.split("/").filter(Boolean);
+
+      // /api/*
+      if (p[0] !== "api") return bad("Not found", 404);
+
+      // Health
+      if (p[1] === "health") {
+        return json({ ok: true, ts: new Date().toISOString() });
+      }
+
+      // Login (SEM auth)
+      if (p[1] === "login" && req.method === "POST") {
+        const body: any = await readJson(req);
+        const email = String(body.email || "").trim().toLowerCase();
+        const senha = String(body.senha || "");
+
+        if (!email || !senha) return bad("Informe email e senha.", 400);
+
+        const v = await env.DB
+          .prepare("SELECT id,email,name,password_salt,password_hash FROM vendors WHERE email=?")
+          .bind(email)
+          .first();
+
+        if (!v) return bad("Usuário não encontrado.", 401);
+
+        const enc = new TextEncoder();
+        const hashBuf = await crypto.subtle.digest(
+          "SHA-256",
+          enc.encode(String(v.password_salt) + senha)
+        );
+        const calc = Array.from(new Uint8Array(hashBuf))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+
+        if (calc !== v.password_hash) return bad("Senha inválida.", 401);
+
+        // token simples HMAC (compatível com seu frontend)
+        const payload = {
+          sub: v.id,
+          email: v.email,
+          name: v.name,
+          exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        };
+
+        const body64 = btoa(JSON.stringify(payload))
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/g, "");
+
+        const key = await crypto.subtle.importKey(
+          "raw",
+          enc.encode(env.JWT_SECRET),
+          { name: "HMAC", hash: "SHA-256" },
+          false,
+          ["sign"]
+        );
+        const sigBuf = await crypto.subtle.sign("HMAC", key, enc.encode(body64));
+        const sig = btoa(String.fromCharCode(...new Uint8Array(sigBuf)))
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/g, "");
+
+        const token = `${body64}.${sig}`;
+
+        return json({
+          token,
+          vendor: { id: v.id, email: v.email, name: v.name },
+        });
+      }
+
+      // Se quiser, deixe bootstrap público 401 amigável (pra não quebrar o frontend)
+      if (p[1] === "bootstrap") {
+        return bad("Não autorizado.", 401);
+      }
+
+      return bad("Not found", 404);
+    } catch (e: any) {
+      // MUITO IMPORTANTE: erro também com CORS
+      return bad(`Erro interno: ${e?.message || String(e)}`, 500);
+    }
+  },
+};
 
 function parseJSONField<T>(v: unknown, fallback: T): T {
   try {
