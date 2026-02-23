@@ -1,33 +1,34 @@
 export interface Env {
   DB: D1Database;
-  BACKUPS: R2Bucket;
-  JWT_SECRET: string; // Secret no Cloudflare
+  BACKUPS?: R2Bucket;
+
+  // Secret (configure como SECRET no Cloudflare)
+  JWT_SECRET: string;
 }
 
+/** -------------------- CORS + helpers -------------------- **/
 const CORS_HEADERS: Record<string, string> = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-  "access-control-allow-headers": "content-type,authorization",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+  "Access-Control-Allow-Headers": "content-type,authorization",
 };
 
-function withCors(headers?: HeadersInit): Headers {
-  const h = new Headers(headers);
+function withCors(res: Response) {
+  const h = new Headers(res.headers);
   for (const [k, v] of Object.entries(CORS_HEADERS)) h.set(k, v);
-  return h;
+  return new Response(res.body, { status: res.status, headers: h });
 }
 
-function json(data: any, status = 200, headers?: HeadersInit) {
-  return new Response(JSON.stringify(data), {
+function json(data: unknown, status = 200) {
+  const res = new Response(JSON.stringify(data), {
     status,
-    headers: withCors({
-      "content-type": "application/json; charset=utf-8",
-      ...(headers || {}),
-    }),
+    headers: { "content-type": "application/json; charset=utf-8" },
   });
+  return withCors(res);
 }
 
-function bad(message: string, status = 400, detail?: any) {
-  return json({ error: message, detail }, status);
+function bad(error: string, status = 400, detail?: unknown) {
+  return json(detail !== undefined ? { error, detail } : { error }, status);
 }
 
 function nowISO() {
@@ -38,17 +39,17 @@ function parts(url: string) {
   return new URL(url).pathname.split("/").filter(Boolean);
 }
 
-async function readJson(req: Request) {
+async function readJson<T = any>(req: Request): Promise<T> {
   const ct = req.headers.get("content-type") || "";
-  if (!ct.toLowerCase().includes("application/json")) return {};
+  if (!ct.includes("application/json")) return {} as T;
   try {
-    return await req.json();
+    return (await req.json()) as T;
   } catch {
-    return {};
+    return {} as T;
   }
 }
 
-// --- crypto helpers ---
+/** -------------------- crypto / token -------------------- **/
 function b64url(bytes: ArrayBuffer) {
   const u8 = new Uint8Array(bytes);
   let s = "";
@@ -87,12 +88,7 @@ async function sha256Hex(s: string) {
     .join("");
 }
 
-type TokenPayload = {
-  sub: string;
-  email: string;
-  name: string;
-  exp: number; // ms epoch
-};
+type TokenPayload = { sub: string; email: string; name: string; exp: number };
 
 async function makeToken(env: Env, payload: TokenPayload) {
   if (!env.JWT_SECRET) throw new Error("JWT_SECRET não configurado");
@@ -106,8 +102,8 @@ async function verifyToken(env: Env, token: string): Promise<TokenPayload | null
   const [body, sig] = token.split(".");
   if (!body || !sig) return null;
 
-  const expected = await hmac(env.JWT_SECRET, body);
-  if (expected !== sig) return null;
+  const expSig = await hmac(env.JWT_SECRET, body);
+  if (expSig !== sig) return null;
 
   const payload = JSON.parse(fromB64url(body)) as TokenPayload;
   if (payload.exp && Date.now() > payload.exp) return null;
@@ -121,7 +117,16 @@ async function auth(req: Request, env: Env) {
   return verifyToken(env, m[1]);
 }
 
-// --- ids ---
+/** -------------------- ids / parsing -------------------- **/
+function parseJSONField<T>(v: unknown, fallback: T): T {
+  try {
+    if (typeof v !== "string" || !v) return fallback;
+    return JSON.parse(v) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 async function nextId(env: Env, vendorId: string, kind: string) {
   const row = await env.DB.prepare(
     "SELECT value FROM counters WHERE vendor_id=? AND kind=?"
@@ -147,49 +152,31 @@ async function nextId(env: Env, vendorId: string, kind: string) {
     lembrete: "LB",
     rota: "RT",
     nota: "NT",
-    vendor: "VD",
   };
 
   return `${prefix[kind] || "ID"}-${String(next).padStart(6, "0")}`;
 }
 
-function parseJSONField<T>(v: any, fallback: T): T {
-  try {
-    if (!v) return fallback;
-    if (typeof v === "string") return JSON.parse(v);
-    return v as T;
-  } catch {
-    return fallback;
-  }
-}
-
-async function requireVendor(req: Request, env: Env) {
-  const user = await auth(req, env);
-  if (!user) return { err: bad("Não autorizado.", 401) as Response, vendorId: "" };
-  return { err: null as Response | null, vendorId: String(user.sub), user };
-}
-
+/** -------------------- main worker -------------------- **/
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     try {
-      // Preflight CORS
-      if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: withCors() });
+      // Preflight
+      if (req.method === "OPTIONS") return withCors(new Response(null, { status: 204 }));
 
       const p = parts(req.url);
 
-      // raiz (só pra não ficar “Not found” sem CORS)
-      if (p.length === 0) return json({ ok: true, service: "supervenda-api", hint: "use /api/health" });
-
+      // Só /api/*
       if (p[0] !== "api") return bad("Not found", 404);
 
-      // /api/health
-      if (p[1] === "health") return json({ ok: true, ts: nowISO() });
+      // Health público
+      if (p[1] === "health") {
+        return json({ ok: true, ts: nowISO() });
+      }
 
-      // /api/login  (PUBLIC)
+      // Login público
       if (p[1] === "login" && req.method === "POST") {
-        if (!env.JWT_SECRET) return bad("Erro interno", 500, "JWT_SECRET não configurado");
-
-        const body = await readJson(req);
+        const body = await readJson<{ email?: string; senha?: string }>(req);
         const email = String(body.email || "").trim().toLowerCase();
         const senha = String(body.senha || "");
 
@@ -199,31 +186,35 @@ export default {
           "SELECT id,email,name,password_salt,password_hash FROM vendors WHERE email=?"
         )
           .bind(email)
-          .first<any>();
+          .first<{ id: string; email: string; name: string; password_salt: string; password_hash: string }>();
 
         if (!v) return bad("Usuário não encontrado.", 401);
 
-        const calc = await sha256Hex(String(v.password_salt) + senha);
-        if (calc !== String(v.password_hash)) return bad("Senha inválida.", 401);
+        const calc = await sha256Hex(String(v.password_salt || "") + senha);
+        if (calc !== v.password_hash) return bad("Senha inválida.", 401);
 
         const token = await makeToken(env, {
-          sub: String(v.id),
-          email: String(v.email),
-          name: String(v.name),
+          sub: v.id,
+          email: v.email,
+          name: v.name,
           exp: Date.now() + 1000 * 60 * 60 * 24 * 7, // 7 dias
         });
 
         return json({ token, vendor: { id: v.id, email: v.email, name: v.name } });
       }
 
-      // AUTH abaixo daqui
-      const { err, vendorId, user } = await requireVendor(req, env);
-      if (err) return err;
+      // A partir daqui exige token
+      const user = await auth(req, env);
+      if (!user) return bad("Não autorizado.", 401);
 
-      // /api/me
-      if (p[1] === "me") return json({ id: vendorId, email: user!.email, name: user!.name });
+      const vendorId = String(user.sub);
 
-      // /api/bootstrap
+      // Me
+      if (p[1] === "me") {
+        return json({ id: vendorId, email: user.email, name: user.name });
+      }
+
+      // Bootstrap
       if (p[1] === "bootstrap") {
         const [clientes, produtos, pedidos, despesas, lembretes, notas, rotas] = await Promise.all([
           env.DB.prepare("SELECT * FROM clientes WHERE vendor_id=? ORDER BY created_at DESC").bind(vendorId).all(),
@@ -246,26 +237,26 @@ export default {
         });
       }
 
-      // /api/backup  (salva bootstrap no R2)
+      // Backup (salva o bootstrap no R2)
       if (p[1] === "backup" && req.method === "POST") {
-        const dataResp = await this.fetch(
+        if (!env.BACKUPS) return bad("R2 BACKUPS não configurado.", 500);
+        const dataRes = await this.fetch(
           new Request(new URL("/api/bootstrap", req.url).toString(), { headers: req.headers }),
           env
         );
-        const data = await dataResp.json();
-
-        const key = `backup/${vendorId}/${nowISO().slice(0, 10)}/${Date.now()}.json`;
+        const data = await dataRes.json();
+        const key = `backup/${vendorId}/${new Date().toISOString().slice(0, 10)}/${Date.now()}.json`;
         await env.BACKUPS.put(key, JSON.stringify(data, null, 2), {
           httpMetadata: { contentType: "application/json" },
         });
         return json({ ok: true, key });
       }
 
-      // CLIENTES (endpoint especial por causa das tags)
+      /** -------------------- CRUD -------------------- **/
+      // clientes (tem tags JSON)
       if (p[1] === "clientes") {
         if (req.method === "POST") {
-          const body = await readJson(req);
-
+          const body = await readJson<any>(req);
           const id = String(body.id || "").trim() || (await nextId(env, vendorId, "cliente"));
           const createdAt = nowISO();
           const updatedAt = nowISO();
@@ -277,21 +268,10 @@ export default {
               (id,vendor_id,nome,telefone,endereco,numero,bairro,cidade,uf,cep,cpfcnpj,pagamentoPadrao,prazoDias,tags,obs,updated_at,created_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
-              nome=excluded.nome,
-              telefone=excluded.telefone,
-              endereco=excluded.endereco,
-              numero=excluded.numero,
-              bairro=excluded.bairro,
-              cidade=excluded.cidade,
-              uf=excluded.uf,
-              cep=excluded.cep,
-              cpfcnpj=excluded.cpfcnpj,
-              pagamentoPadrao=excluded.pagamentoPadrao,
-              prazoDias=excluded.prazoDias,
-              tags=excluded.tags,
-              obs=excluded.obs,
-              updated_at=excluded.updated_at
-            `
+              nome=excluded.nome, telefone=excluded.telefone, endereco=excluded.endereco, numero=excluded.numero, bairro=excluded.bairro,
+              cidade=excluded.cidade, uf=excluded.uf, cep=excluded.cep, cpfcnpj=excluded.cpfcnpj, pagamentoPadrao=excluded.pagamentoPadrao,
+              prazoDias=excluded.prazoDias, tags=excluded.tags, obs=excluded.obs, updated_at=excluded.updated_at
+          `
           )
             .bind(
               id,
@@ -327,9 +307,8 @@ export default {
         }
       }
 
-      // CRUD genérico
-      const entity = p[1];
-      const tableMap: Record<string, string> = {
+      // Mapa tabelas
+      const map: Record<string, string> = {
         produtos: "produtos",
         pedidos: "pedidos",
         despesas: "despesas",
@@ -338,8 +317,12 @@ export default {
         rotas: "rotas",
       };
 
-      if (tableMap[entity] && req.method === "POST") {
-        const body = await readJson(req);
+      const entity = p[1];
+      const table = map[entity];
+
+      // UPSERT genérico por entidade
+      if (table && req.method === "POST") {
+        const body = await readJson<any>(req);
 
         const kindMap: Record<string, string> = {
           produtos: "produto",
@@ -349,6 +332,7 @@ export default {
           notas: "nota",
           rotas: "rota",
         };
+
         const kind = kindMap[entity];
         const id = String(body.id || "").trim() || (await nextId(env, vendorId, kind));
         const createdAt = nowISO();
@@ -361,21 +345,10 @@ export default {
               (id,vendor_id,marca,produto,modelo,descricao,categoria,sku,agregados,valorCompra,valorVenda,estoqueAtual,estoqueMin,local,status,updated_at,created_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
-              marca=excluded.marca,
-              produto=excluded.produto,
-              modelo=excluded.modelo,
-              descricao=excluded.descricao,
-              categoria=excluded.categoria,
-              sku=excluded.sku,
-              agregados=excluded.agregados,
-              valorCompra=excluded.valorCompra,
-              valorVenda=excluded.valorVenda,
-              estoqueAtual=excluded.estoqueAtual,
-              estoqueMin=excluded.estoqueMin,
-              local=excluded.local,
-              status=excluded.status,
-              updated_at=excluded.updated_at
-            `
+              marca=excluded.marca, produto=excluded.produto, modelo=excluded.modelo, descricao=excluded.descricao, categoria=excluded.categoria,
+              sku=excluded.sku, agregados=excluded.agregados, valorCompra=excluded.valorCompra, valorVenda=excluded.valorVenda,
+              estoqueAtual=excluded.estoqueAtual, estoqueMin=excluded.estoqueMin, local=excluded.local, status=excluded.status, updated_at=excluded.updated_at
+          `
           )
             .bind(
               id,
@@ -410,18 +383,9 @@ export default {
               (id,vendor_id,data,clienteId,clienteNome,urgencia,formaPagamento,prazoDias,status,obs,total,itens,updated_at,created_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
-              data=excluded.data,
-              clienteId=excluded.clienteId,
-              clienteNome=excluded.clienteNome,
-              urgencia=excluded.urgencia,
-              formaPagamento=excluded.formaPagamento,
-              prazoDias=excluded.prazoDias,
-              status=excluded.status,
-              obs=excluded.obs,
-              total=excluded.total,
-              itens=excluded.itens,
-              updated_at=excluded.updated_at
-            `
+              data=excluded.data, clienteId=excluded.clienteId, clienteNome=excluded.clienteNome, urgencia=excluded.urgencia, formaPagamento=excluded.formaPagamento,
+              prazoDias=excluded.prazoDias, status=excluded.status, obs=excluded.obs, total=excluded.total, itens=excluded.itens, updated_at=excluded.updated_at
+          `
           )
             .bind(
               id,
@@ -448,16 +412,12 @@ export default {
         if (entity === "despesas") {
           await env.DB.prepare(
             `
-            INSERT INTO despesas (id,vendor_id,data,categoria,valor,pagamento,obs,updated_at,created_at)
+            INSERT INTO despesas
+              (id,vendor_id,data,categoria,valor,pagamento,obs,updated_at,created_at)
             VALUES (?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
-              data=excluded.data,
-              categoria=excluded.categoria,
-              valor=excluded.valor,
-              pagamento=excluded.pagamento,
-              obs=excluded.obs,
-              updated_at=excluded.updated_at
-            `
+              data=excluded.data, categoria=excluded.categoria, valor=excluded.valor, pagamento=excluded.pagamento, obs=excluded.obs, updated_at=excluded.updated_at
+          `
           )
             .bind(
               id,
@@ -479,19 +439,13 @@ export default {
         if (entity === "lembretes") {
           await env.DB.prepare(
             `
-            INSERT INTO lembretes (id,vendor_id,tipo,titulo,data,texto,status,clienteId,clienteNome,segmento,updated_at,created_at)
+            INSERT INTO lembretes
+              (id,vendor_id,tipo,titulo,data,texto,status,clienteId,clienteNome,segmento,updated_at,created_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
-              tipo=excluded.tipo,
-              titulo=excluded.titulo,
-              data=excluded.data,
-              texto=excluded.texto,
-              status=excluded.status,
-              clienteId=excluded.clienteId,
-              clienteNome=excluded.clienteNome,
-              segmento=excluded.segmento,
-              updated_at=excluded.updated_at
-            `
+              tipo=excluded.tipo, titulo=excluded.titulo, data=excluded.data, texto=excluded.texto, status=excluded.status,
+              clienteId=excluded.clienteId, clienteNome=excluded.clienteNome, segmento=excluded.segmento, updated_at=excluded.updated_at
+          `
           )
             .bind(
               id,
@@ -516,14 +470,12 @@ export default {
         if (entity === "notas") {
           await env.DB.prepare(
             `
-            INSERT INTO notas (id,vendor_id,titulo,texto,fixada,updated_at,created_at)
+            INSERT INTO notas
+              (id,vendor_id,titulo,texto,fixada,updated_at,created_at)
             VALUES (?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
-              titulo=excluded.titulo,
-              texto=excluded.texto,
-              fixada=excluded.fixada,
-              updated_at=excluded.updated_at
-            `
+              titulo=excluded.titulo, texto=excluded.texto, fixada=excluded.fixada, updated_at=excluded.updated_at
+          `
           )
             .bind(id, vendorId, body.titulo || "", body.texto || "", body.fixada ? 1 : 0, updatedAt, createdAt)
             .run();
@@ -536,14 +488,12 @@ export default {
           const paradas = JSON.stringify(body.paradas || []);
           await env.DB.prepare(
             `
-            INSERT INTO rotas (id,vendor_id,data,obs,paradas,updated_at,created_at)
+            INSERT INTO rotas
+              (id,vendor_id,data,obs,paradas,updated_at,created_at)
             VALUES (?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
-              data=excluded.data,
-              obs=excluded.obs,
-              paradas=excluded.paradas,
-              updated_at=excluded.updated_at
-            `
+              data=excluded.data, obs=excluded.obs, paradas=excluded.paradas, updated_at=excluded.updated_at
+          `
           )
             .bind(id, vendorId, body.data || "", body.obs || "", paradas, updatedAt, createdAt)
             .run();
@@ -551,20 +501,17 @@ export default {
           const row = await env.DB.prepare("SELECT * FROM rotas WHERE id=? AND vendor_id=?").bind(id, vendorId).first<any>();
           return json({ ...row, paradas: parseJSONField(row?.paradas, []) });
         }
-
-        return bad("Not found", 404);
       }
 
-      if (tableMap[entity] && req.method === "DELETE" && p[2]) {
-        await env.DB.prepare(`DELETE FROM ${tableMap[entity]} WHERE id=? AND vendor_id=?`)
-          .bind(p[2], vendorId)
-          .run();
+      // DELETE genérico
+      if (table && req.method === "DELETE" && p[2]) {
+        await env.DB.prepare(`DELETE FROM ${table} WHERE id=? AND vendor_id=?`).bind(p[2], vendorId).run();
         return json({ ok: true });
       }
 
       return bad("Not found", 404);
     } catch (e: any) {
-      // importante: erro com CORS também
+      // erro interno com CORS também
       return bad("Erro interno", 500, e?.message || String(e));
     }
   },
