@@ -1512,7 +1512,177 @@ function upsertLocal(key, saved) {
   if (idx >= 0) state[key][idx] = saved;
   else state[key].unshift(saved);
 }
+/* ================= AÇÕES GLOBAIS (Sair / Trocar usuário / Backup) ================= */
 
+function exportJsonFile(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function downloadBackupLocal() {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    apiBase: (window.APP_CONFIG && window.APP_CONFIG.API_BASE) || "",
+    user: state?.me || null,
+    data: {
+      clientes: state.clientes || [],
+      produtos: state.produtos || [],
+      pedidos: state.pedidos || [],
+      rotas: state.rotas || [],
+      despesas: state.despesas || [],
+      lembretes: state.lembretes || [],
+      notas: state.notas || [],
+      counters: state.counters || {}
+    }
+  };
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  exportJsonFile(`supervenda-backup-${stamp}.json`, payload);
+  toast("Backup baixado (.json)");
+}
+
+async function tryApiBackup() {
+  // tenta endpoint de backup, se existir no backend
+  try {
+    const res = await api("/api/backup");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    exportJsonFile(`supervenda-backup-api-${stamp}.json`, res);
+    toast("Backup da API baixado");
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function handleBackup() {
+  const okApi = await tryApiBackup();
+  if (!okApi) downloadBackupLocal();
+}
+
+function handleRestoreLocal(file) {
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      const d = parsed?.data || parsed || {};
+
+      // restaura somente em memória/local e tenta enviar para API item a item
+      const keys = ["clientes", "produtos", "pedidos", "rotas", "despesas", "lembretes", "notas"];
+      for (const k of keys) {
+        if (!Array.isArray(d[k])) continue;
+        state[k] = d[k];
+      }
+      render();
+      toast("Backup carregado localmente");
+
+      // opcional: sincronizar com API (melhor esforço)
+      const map = {
+        clientes: "/api/clientes",
+        produtos: "/api/produtos",
+        pedidos: "/api/pedidos",
+        rotas: "/api/rotas",
+        despesas: "/api/despesas",
+        lembretes: "/api/lembretes",
+        notas: "/api/notas"
+      };
+
+      for (const [k, endpoint] of Object.entries(map)) {
+        if (!Array.isArray(state[k])) continue;
+        for (const item of state[k]) {
+          try {
+            await api(endpoint, { method: "POST", body: JSON.stringify(item) });
+          } catch (e) {
+            console.warn("Falha ao restaurar item", k, item?.id, e);
+          }
+        }
+      }
+
+      await refreshState();
+      render();
+      toast("Restauração concluída (com melhor esforço)");
+    } catch (e) {
+      console.error(e);
+      alert("Arquivo de backup inválido.");
+    }
+  };
+  reader.readAsText(file);
+}
+
+function logout(forceRelogin = false) {
+  try {
+    localStorage.removeItem("sv_token");
+    localStorage.removeItem("sv_me");
+    // se seu projeto usa outro nome, limpamos também:
+    localStorage.removeItem("token");
+    localStorage.removeItem("auth_token");
+  } catch (_) {}
+
+  if (forceRelogin) {
+    alert("Sessão encerrada. Faça login novamente.");
+  }
+  location.hash = "#dashboard";
+  location.reload();
+}
+
+function ensureTopActions() {
+  // cria barra de ações só uma vez
+  if (document.getElementById("sv-top-actions")) return;
+
+  const headerTarget =
+    document.querySelector(".topbar") ||
+    document.querySelector("header") ||
+    document.querySelector(".content") ||
+    document.body;
+
+  const wrap = document.createElement("div");
+  wrap.id = "sv-top-actions";
+  wrap.style.display = "flex";
+  wrap.style.gap = "8px";
+  wrap.style.flexWrap = "wrap";
+  wrap.style.margin = "8px 0 12px 0";
+  wrap.style.alignItems = "center";
+
+  wrap.innerHTML = `
+    <button id="sv_backup_btn" class="btn">Backup</button>
+    <button id="sv_restore_btn" class="btn">Restaurar</button>
+    <button id="sv_trocar_btn" class="btn">Trocar usuário</button>
+    <button id="sv_sair_btn" class="btn btn-danger">Sair</button>
+    <input id="sv_restore_input" type="file" accept=".json,application/json" style="display:none" />
+  `;
+
+  // tenta inserir em área principal sem quebrar layout
+  if (headerTarget.firstChild) headerTarget.insertBefore(wrap, headerTarget.firstChild);
+  else headerTarget.appendChild(wrap);
+
+  const backupBtn = document.getElementById("sv_backup_btn");
+  const restoreBtn = document.getElementById("sv_restore_btn");
+  const trocarBtn = document.getElementById("sv_trocar_btn");
+  const sairBtn = document.getElementById("sv_sair_btn");
+  const restoreInput = document.getElementById("sv_restore_input");
+
+  backupBtn.onclick = handleBackup;
+  restoreBtn.onclick = () => restoreInput.click();
+  restoreInput.onchange = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) handleRestoreLocal(f);
+    e.target.value = "";
+  };
+
+  trocarBtn.onclick = () => {
+    logout(true);
+  };
+
+  sairBtn.onclick = () => {
+    if (!confirm("Deseja sair da conta?")) return;
+    logout(false);
+  };
+}
 /* ================= BOOT ================= */
 window.addEventListener("hashchange", render);
 
@@ -1528,6 +1698,7 @@ routes.forEach((r) => {
 
 (async () => {
   await ensureAuth();
+  ensureTopActions(); // <-- adiciona botões globais
   await bootstrap();
   render();
 })();
