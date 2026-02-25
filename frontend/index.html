@@ -1,43 +1,537 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
-  <title>Vendas Externas Pro (Cloud)</title>
-  <link rel="manifest" href="./manifest.json">
-  <meta name="theme-color" content="#111827"/>
-  <link rel="stylesheet" href="./styles.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supervenda - Vendas Externas</title>
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="./styles.css" />
+
+  <style>
+    /* Ajustes específicos do layout base */
+    .app-shell {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      background: rgba(8, 16, 34, 0.92);
+      border-right: 1px solid rgba(255,255,255,.08);
+      padding: 14px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+
+    .brand-badge {
+      width: 38px;
+      height: 38px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #1dd17b, #0fa968);
+      display: grid;
+      place-items: center;
+      color: #03110b;
+      font-weight: 800;
+      box-shadow: 0 8px 18px rgba(29,209,123,.28);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 15px;
+      color: #fff;
+      line-height: 1.1;
+    }
+
+    .brand small {
+      color: #b7c7e7;
+      display: block;
+      font-size: 11px;
+      margin-top: 2px;
+    }
+
+    .nav-group-title {
+      color: #9cb2d8;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      margin: 14px 6px 8px;
+    }
+
+    .nav-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav-btn {
+      width: 100%;
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.08);
+      background: rgba(255,255,255,.02);
+      color: #fff;
+      cursor: pointer;
+      transition: .15s ease;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .nav-btn:hover {
+      background: rgba(255,255,255,.05);
+      transform: translateY(-1px);
+    }
+
+    .nav-btn.active {
+      border-color: rgba(29,209,123,.5);
+      background: rgba(29,209,123,.12);
+      box-shadow: inset 0 0 0 1px rgba(29,209,123,.15);
+    }
+
+    .nav-btn .hint {
+      color: #9cb2d8;
+      font-size: 11px;
+    }
+
+    .main-area {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-width: 0;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(6px);
+      background: rgba(5, 11, 26, 0.78);
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      padding: 10px 14px;
+    }
+
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+
+    .topbar-title {
+      min-width: 0;
+    }
+
+    .topbar-title h2 {
+      margin: 0;
+      color: #fff;
+      font-size: 16px;
+      line-height: 1.1;
+    }
+
+    .topbar-title .subtitle {
+      color: #b7c7e7;
+      font-size: 12px;
+      margin-top: 3px;
+    }
+
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .topbar-actions input[type="search"] {
+      width: 240px;
+      max-width: 60vw;
+    }
+
+    .main-content {
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .login-wrap {
+      max-width: 460px;
+      margin: 24px auto;
+    }
+
+    .login-card {
+      background: rgba(10,20,40,.78);
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 10px 24px rgba(0,0,0,.28);
+    }
+
+    .login-card h3 {
+      margin: 0 0 8px 0;
+      color: #fff;
+    }
+
+    .login-card p {
+      color: #b7c7e7;
+      margin: 0 0 12px 0;
+      font-size: 13px;
+    }
+
+    .login-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .btn-primary {
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #1dd17b;
+      background: #11261b;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    .btn-soft {
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: transparent;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    .login-tip {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #9cb2d8;
+      border-top: 1px solid rgba(255,255,255,.06);
+      padding-top: 10px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 980px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid rgba(255,255,255,.08);
+      }
+
+      .topbar {
+        position: static;
+      }
+
+      .topbar-actions input[type="search"] {
+        width: 100%;
+        max-width: 100%;
+      }
+    }
+  </style>
 </head>
 <body>
-  <div class="container">
+  <div class="app-shell">
+    <!-- Sidebar -->
     <aside class="sidebar">
-      <div class="brand">Vendas <span>Externas Pro</span></div>
-      <div class="small">Cloudflare (Login por vendedor)</div>
-      <div class="nav"></div>
-      <div class="small" style="margin-top:14px; line-height:1.4">
-        Dados salvos na nuvem (D1) + backup no R2.
+      <div class="brand">
+        <div class="brand-badge">SV</div>
+        <div>
+          <h1>Supervenda</h1>
+          <small>Vendas externas • B2C</small>
+        </div>
+      </div>
+
+      <div class="nav-group-title">Menu</div>
+      <nav class="nav-list" id="sidebar-nav">
+        <button class="nav-btn active" data-route="dashboard">
+          <span>📊 Dashboard</span>
+          <span class="hint">início</span>
+        </button>
+
+        <button class="nav-btn" data-route="clientes">
+          <span>👥 Clientes</span>
+          <span class="hint">cadastro</span>
+        </button>
+
+        <button class="nav-btn" data-route="mercadorias">
+          <span>🧰 Mercadorias</span>
+          <span class="hint">estoque</span>
+        </button>
+
+        <button class="nav-btn" data-route="pedidos">
+          <span>🧾 Pedidos / Vendas</span>
+          <span class="hint">lançamentos</span>
+        </button>
+
+        <button class="nav-btn" data-route="rotas">
+          <span>🗺️ Rotas</span>
+          <span class="hint">visitas</span>
+        </button>
+
+        <button class="nav-btn" data-route="despesas">
+          <span>⛽ Despesas</span>
+          <span class="hint">custos</span>
+        </button>
+
+        <button class="nav-btn" data-route="lembretes">
+          <span>🔔 Lembretes</span>
+          <span class="hint">campanhas</span>
+        </button>
+
+        <button class="nav-btn" data-route="anotacoes">
+          <span>📝 Anotações</span>
+          <span class="hint">geral</span>
+        </button>
+      </nav>
+
+      <div class="nav-group-title">Sistema</div>
+      <div class="nav-list">
+        <button class="nav-btn" id="btn-change-api">
+          <span>🌐 Trocar URL da API</span>
+          <span class="hint">workers</span>
+        </button>
+        <button class="nav-btn" id="btn-hard-refresh">
+          <span>🔄 Recarregar app</span>
+          <span class="hint">cache</span>
+        </button>
+      </div>
+
+      <div style="margin-top:14px; padding-top:12px; border-top:1px solid rgba(255,255,255,.08);">
+        <div style="font-size:11px; color:#9cb2d8; margin-bottom:4px;">API atual</div>
+        <div id="api-base-label" style="font-size:12px; color:#fff; word-break: break-all;"></div>
       </div>
     </aside>
 
-    <main class="main">
-      <div class="topbar">
-        <div>
-          <div class="small">Você está em:</div>
-          <div style="font-size:20px; font-weight:900" id="pageTitle">Dashboard</div>
+    <!-- Main -->
+    <section class="main-area">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div class="topbar-title">
+            <h2 id="page-title">Dashboard</h2>
+            <div class="subtitle" id="page-subtitle">
+              Gestão de clientes, mercadorias, pedidos, rotas e despesas
+            </div>
+          </div>
+
+          <div class="topbar-actions">
+            <input
+              id="global-search"
+              type="search"
+              placeholder="Busca rápida (visual)"
+              aria-label="Busca rápida"
+            />
+            <button class="btn-soft" id="btn-print" type="button">🖨️ Imprimir</button>
+          </div>
         </div>
-        <div class="search">
-          <input id="q" placeholder="Buscar (cliente, produto...)">
-        </div>
-        <div class="actions">
-          <button class="btn" onclick="window.print()">Imprimir</button>
-        </div>
-      </div>
-      <div id="view"></div>
-    </main>
+      </header>
+
+      <main class="main-content" id="app">
+        <!-- Tela de login (fica visível se não houver token) -->
+        <section id="login-section" class="login-wrap">
+          <div class="login-card">
+            <h3>Entrar no Supervenda</h3>
+            <p>
+              Faça login para carregar seus clientes, pedidos, despesas e demais cadastros.
+            </p>
+
+            <form id="login-form">
+              <div class="sv-grid" style="gap:10px;">
+                <label>
+                  <div style="margin-bottom:5px;">E-mail</div>
+                  <input
+                    type="email"
+                    name="email"
+                    placeholder="seuemail@exemplo.com"
+                    required
+                    autocomplete="username"
+                  />
+                </label>
+
+                <label>
+                  <div style="margin-bottom:5px;">Senha</div>
+                  <input
+                    type="password"
+                    name="senha"
+                    placeholder="Digite sua senha"
+                    required
+                    autocomplete="current-password"
+                  />
+                </label>
+              </div>
+
+              <div class="login-actions">
+                <button type="submit" class="btn-primary">Entrar</button>
+                <button type="button" class="btn-soft" id="btn-fill-demo">Preencher exemplo</button>
+              </div>
+            </form>
+
+            <div class="login-tip">
+              Dica: se der erro de <b>fetch</b>, normalmente é URL da API em HTTP.
+              Use o botão <b>“Trocar URL da API”</b> e informe a URL HTTPS do Worker.
+            </div>
+          </div>
+        </section>
+
+        <!-- Área que o app.js usa para renderizar telas -->
+        <section id="workspace-section" class="hidden">
+          <!-- O app.js injeta #sv-top-actions e #sv-screen-root aqui -->
+          <!-- Mantemos uma área-base para garantir compatibilidade -->
+          <div id="workspace-anchor"></div>
+        </section>
+      </main>
+    </section>
   </div>
 
-  <div id="toast" style="position:fixed; right:14px; bottom:14px; background:#0b1325; border:1px solid var(--border); padding:10px 12px; border-radius:12px; opacity:0; transition:opacity .2s; z-index:99999"></div>
+  <!-- Scripts -->
+  <script src="./config.js"></script>
+  <script src="./db.js"></script>
+  <script src="./app.js"></script>
 
-  <script type="module" src="./app.js"></script>
+  <script>
+    // ========= Integração do layout com o app.js =========
+
+    (function () {
+      const routeLabels = {
+        dashboard: ["Dashboard", "Resumo geral e atalhos"],
+        clientes: ["Clientes", "Cadastro, edição e histórico local"],
+        mercadorias: ["Mercadorias", "Produtos, valores e estoque"],
+        pedidos: ["Pedidos / Vendas", "Lançamento e acompanhamento"],
+        rotas: ["Rotas", "Planejamento de visitas e entregas"],
+        despesas: ["Despesas", "Custos e controle financeiro"],
+        lembretes: ["Lembretes", "Pós-venda e campanhas"],
+        anotacoes: ["Anotações", "Observações gerais"],
+      };
+
+      function updateNavActiveByHash() {
+        const hash = (location.hash || "#dashboard").replace("#", "");
+        document.querySelectorAll("[data-route]").forEach((btn) => {
+          btn.classList.toggle("active", btn.getAttribute("data-route") === hash);
+        });
+
+        const [title, subtitle] = routeLabels[hash] || ["Supervenda", "Gestão comercial"];
+        const titleEl = document.getElementById("page-title");
+        const subEl = document.getElementById("page-subtitle");
+        if (titleEl) titleEl.textContent = title;
+        if (subEl) subEl.textContent = subtitle;
+      }
+
+      function updateApiLabel() {
+        const el = document.getElementById("api-base-label");
+        if (!el || !window.CONFIG) return;
+        el.textContent = window.CONFIG.API_BASE || "(não definido)";
+      }
+
+      function syncLoginWorkspaceVisibility() {
+        const hasToken = !!(window.DB && window.DB.getToken && window.DB.getToken());
+        const login = document.getElementById("login-section");
+        const work = document.getElementById("workspace-section");
+
+        if (!login || !work) return;
+
+        if (hasToken) {
+          login.classList.add("hidden");
+          work.classList.remove("hidden");
+        } else {
+          login.classList.remove("hidden");
+          work.classList.add("hidden");
+        }
+      }
+
+      // Menu lateral
+      document.querySelectorAll("[data-route]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const route = btn.getAttribute("data-route");
+          location.hash = "#" + route;
+          updateNavActiveByHash();
+          syncLoginWorkspaceVisibility();
+        });
+      });
+
+      // Topbar
+      const globalSearch = document.getElementById("global-search");
+      if (globalSearch) {
+        globalSearch.addEventListener("input", (e) => {
+          // busca visual local; o app.js tem seu próprio campo por tela
+          // aqui só mantemos para UX futura
+          window.__sv_global_search = e.target.value || "";
+        });
+      }
+
+      const btnPrint = document.getElementById("btn-print");
+      if (btnPrint) {
+        btnPrint.addEventListener("click", () => window.print());
+      }
+
+      // Sistema
+      const btnApi = document.getElementById("btn-change-api");
+      if (btnApi) {
+        btnApi.addEventListener("click", () => {
+          const atual = (window.CONFIG && window.CONFIG.API_BASE) || "";
+          const novo = prompt(
+            "Informe a URL da API (Worker) com HTTPS.\nExemplo:\nhttps://supervenda.krasinskyekuroli.workers.dev",
+            atual
+          );
+
+          if (!novo) return;
+          if (window.setApiBase) window.setApiBase(novo);
+        });
+      }
+
+      const btnReload = document.getElementById("btn-hard-refresh");
+      if (btnReload) {
+        btnReload.addEventListener("click", () => {
+          location.reload();
+        });
+      }
+
+      // botão de preencher exemplo (login)
+      const btnFillDemo = document.getElementById("btn-fill-demo");
+      if (btnFillDemo) {
+        btnFillDemo.addEventListener("click", () => {
+          const form = document.getElementById("login-form");
+          if (!form) return;
+          const email = form.querySelector("input[name='email']");
+          const senha = form.querySelector("input[name='senha']");
+          if (email && !email.value) email.value = "vendedor@supervenda.com";
+          if (senha && !senha.value) senha.value = "123456";
+        });
+      }
+
+      // Reage ao hash e sessão
+      window.addEventListener("hashchange", () => {
+        updateNavActiveByHash();
+        syncLoginWorkspaceVisibility();
+      });
+
+      // Pequeno atraso para deixar app.js inicializar
+      setTimeout(() => {
+        updateNavActiveByHash();
+        updateApiLabel();
+        syncLoginWorkspaceVisibility();
+      }, 50);
+
+      // Atualiza API label se recarregar config
+      setTimeout(updateApiLabel, 400);
+    })();
+  </script>
 </body>
 </html>
