@@ -1,33 +1,94 @@
-import { CONFIG } from "./config.js";
+// frontend/db.js
 
-const TOKEN_KEY="vendas_pro_token_v1";
-export const getToken=()=>localStorage.getItem(TOKEN_KEY)||"";
-export const setToken=(t)=>localStorage.setItem(TOKEN_KEY,t);
-export const clearToken=()=>localStorage.removeItem(TOKEN_KEY);
+function getToken() {
+  return localStorage.getItem("token") || "";
+}
 
-export function money(n){ return Number(n||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"}); }
-export function parseMoney(s){
-  if(typeof s==="number") return s;
-  if(!s) return 0;
-  const t=String(s).trim().replace(/\./g,"").replace(",",".").replace(/[^0-9.-]/g,"");
-  const v=Number(t); return isFinite(v)?v:0;
+function setToken(token) {
+  if (token) localStorage.setItem("token", token);
+  else localStorage.removeItem("token");
 }
-export function calcMargin(p){
-  const c=parseMoney(p.valorCompra), v=parseMoney(p.valorVenda);
-  const m=v-c, pct=v>0?m/v:0; return {margem:m, margemPct:pct};
+
+function getApiBase() {
+  // lê sempre o valor atual normalizado do CONFIG/localStorage
+  if (window.CONFIG?.getSavedApiBase) return window.CONFIG.getSavedApiBase();
+
+  let raw =
+    localStorage.getItem("API_BASE") ||
+    localStorage.getItem("apiBase") ||
+    "https://supervenda.krasinskyekuroli.workers.dev";
+
+  raw = String(raw).trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
+  raw = raw.replace(/^http:\/\//i, "https://");
+  return raw;
 }
-export async function api(path, opts={}){
-  const url = `${CONFIG.API_BASE}${path}`;
-  const headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{});
-  const t=getToken(); if(t) headers["Authorization"]=`Bearer ${t}`;
-  const res = await fetch(url, {...opts, headers});
-  const ct=res.headers.get("content-type")||"";
-  const data = ct.includes("application/json") ? await res.json().catch(()=>null) : await res.text().catch(()=>null);
-  if(!res.ok) throw new Error((data&&data.error)?data.error:`Erro ${res.status}`);
+
+export async function api(path, opts = {}) {
+  const base = getApiBase();
+  const url = `${base}${path}`;
+
+  const headers = Object.assign(
+    { "Content-Type": "application/json" },
+    opts.headers || {}
+  );
+
+  const t = getToken();
+  if (t) headers["Authorization"] = `Bearer ${t}`;
+
+  let res;
+  try {
+    res = await fetch(url, { ...opts, headers });
+  } catch (err) {
+    // erro de rede / mixed content / dns / cors
+    throw new Error(
+      `Falha na conexão com a API (${url}). Verifique se a URL da API está em HTTPS e se o Worker está no ar.`
+    );
+  }
+
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+
+  let data = null;
+  if (ct.includes("application/json")) {
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+  } else {
+    const txt = await res.text().catch(() => "");
+    data = txt ? { error: txt } : {};
+  }
+
+  if (!res.ok) {
+    const msg =
+      (data && (data.detail || data.error || data.message)) ||
+      `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+
   return data;
 }
-export async function login(email, senha){
-  const r = await api("/api/login",{method:"POST",body:JSON.stringify({email,senha})});
-  setToken(r.token); return r;
+
+export async function login(email, senha) {
+  const r = await api("/api/login", {
+    method: "POST",
+    body: JSON.stringify({ email, senha }),
+  });
+
+  if (r?.token) setToken(r.token);
+  return r;
 }
-export async function me(){ return api("/api/me"); }
+
+export async function me() {
+  return api("/api/me");
+}
+
+export async function bootstrap() {
+  return api("/api/bootstrap");
+}
+
+export async function logout() {
+  setToken("");
+  localStorage.removeItem("usuario");
+}
