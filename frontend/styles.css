@@ -1,42 +1,460 @@
+/* styles.css - Supervenda (frontend puro JS) */
+
 :root{
-  --bg:#0b1220; --panel:#111827; --card:#0f172a; --muted:#94a3b8; --text:#e5e7eb;
-  --accent:#22c55e; --danger:#ef4444; --warn:#f59e0b; --border:#1f2937;
+  --bg: #050b1a;
+  --bg-2: #091329;
+  --card: rgba(10,20,40,.78);
+  --card-2: #0d1930;
+  --line: rgba(255,255,255,.10);
+  --line-2: rgba(255,255,255,.16);
+  --text: #ffffff;
+  --muted: #b7c7e7;
+  --muted-2: #9cb2d8;
+  --green: #1dd17b;
+  --green-bg: #11261b;
+  --red: #ff6b6b;
+  --red-bg: #2a1616;
+  --yellow: #ffd166;
+  --yellow-bg: #4a3c14;
+  --blue-bg: #13233c;
+  --shadow: 0 10px 24px rgba(0,0,0,.28);
+  --radius: 14px;
+  --radius-sm: 10px;
 }
-*{box-sizing:border-box}
-body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial; background:var(--bg); color:var(--text)}
-.container{display:flex; min-height:100vh}
-.sidebar{width:260px; background:var(--panel); border-right:1px solid var(--border); padding:16px; position:sticky; top:0; height:100vh}
-.brand{font-weight:800; font-size:18px; margin-bottom:12px}
-.small{color:var(--muted); font-size:12px}
-.nav{margin-top:12px; display:flex; flex-direction:column; gap:8px}
-.nav button{background:transparent; border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:12px; text-align:left; cursor:pointer}
-.nav button.active{border-color:var(--accent)}
-.main{flex:1; padding:18px; max-width:1200px}
-.topbar{display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-bottom:14px}
-.search{flex:1; min-width:220px}
-input, select, textarea{width:100%; padding:10px 12px; border-radius:12px; border:1px solid var(--border); background:#0b1325; color:var(--text)}
-textarea{min-height:90px; resize:vertical}
-.row{display:grid; grid-template-columns:repeat(12,1fr); gap:12px}
-.card{background:var(--card); border:1px solid var(--border); border-radius:16px; padding:14px}
-.card h3{margin:0 0 10px 0; font-size:16px}
-.actions{display:flex; gap:8px; flex-wrap:wrap}
-.btn{padding:10px 12px; border-radius:12px; border:1px solid var(--border); background:#0b1325; color:var(--text); cursor:pointer}
-.btn.primary{border-color:var(--accent)}
-.btn.danger{border-color:var(--danger)}
-.badge{display:inline-flex; align-items:center; padding:4px 8px; border-radius:999px; border:1px solid var(--border); font-size:12px; color:var(--muted)}
-.table{width:100%; border-collapse:separate; border-spacing:0 10px}
-.table th{font-size:12px; color:var(--muted); font-weight:600; text-align:left; padding:0 10px}
-.table td{background:#0b1325; border:1px solid var(--border); padding:10px; vertical-align:top}
-.table tr td:first-child{border-top-left-radius:12px; border-bottom-left-radius:12px}
-.table tr td:last-child{border-top-right-radius:12px; border-bottom-right-radius:12px}
-.kpi{display:flex; flex-direction:column; gap:6px}
-.kpi .v{font-size:22px; font-weight:800}
-.grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
-.grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:12px}
-@media (max-width: 900px){
-  .sidebar{width:92px}
-  .brand span{display:none}
-  .nav button{font-size:12px; padding:10px}
-  .grid3{grid-template-columns:1fr}
-  .grid2{grid-template-columns:1fr}
+
+*{
+  box-sizing: border-box;
+}
+
+html, body{
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(180deg, #040915 0%, #071021 100%);
+  color: var(--text);
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  min-height: 100%;
+}
+
+body{
+  line-height: 1.35;
+}
+
+/* =========================
+   Layout base (compatível com HTML variado)
+   ========================= */
+
+main,
+.main,
+.content,
+#app{
+  color: var(--text);
+}
+
+#sv-top-actions{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+  margin: 8px 0 12px 0;
+}
+
+#sv-screen-root{
+  margin-top: 8px;
+}
+
+/* =========================
+   Cards
+   ========================= */
+
+.sv-card{
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  box-shadow: var(--shadow);
+  margin-bottom: 12px;
+}
+
+.sv-card h3,
+.sv-card h4{
+  margin: 0 0 8px 0;
+  color: var(--text);
+}
+
+/* Caso o app.js injete style inline, ainda assim isso melhora elementos soltos */
+.card{
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* =========================
+   Botões
+   ========================= */
+
+button{
+  font: inherit;
+}
+
+.btn,
+button{
+  transition: .15s ease;
+}
+
+button:not(:disabled){
+  cursor: pointer;
+}
+
+button:disabled{
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+button:hover{
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+button:active{
+  transform: translateY(0);
+  filter: brightness(.98);
+}
+
+/* =========================
+   Inputs / form
+   ========================= */
+
+input, textarea, select{
+  font: inherit;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="date"],
+textarea,
+select{
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--text);
+  outline: none;
+}
+
+input::placeholder,
+textarea::placeholder{
+  color: #8ea6cf;
+}
+
+input:focus,
+textarea:focus,
+select:focus{
+  border-color: rgba(29,209,123,.65);
+  box-shadow: 0 0 0 3px rgba(29,209,123,.14);
+}
+
+textarea{
+  resize: vertical;
+  min-height: 90px;
+}
+
+label{
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* =========================
+   Tabelas simples (se usar)
+   ========================= */
+
+table{
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--text);
+}
+
+th, td{
+  border-bottom: 1px solid var(--line);
+  padding: 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th{
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+tr:hover td{
+  background: rgba(255,255,255,.015);
+}
+
+/* =========================
+   Menu dropdown usuário
+   ========================= */
+
+#sv-user-menu{
+  overflow: hidden;
+  backdrop-filter: blur(6px);
+}
+
+#sv-user-menu button{
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+
+#sv-user-menu button:last-child{
+  border-bottom: none;
+}
+
+#sv-user-menu button:hover{
+  background: rgba(255,255,255,.05);
+  transform: none;
+}
+
+/* =========================
+   Toasts
+   ========================= */
+
+#sv-toast-wrap{
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(360px, calc(100vw - 24px));
+}
+
+#sv-toast-wrap > div{
+  color: #fff;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 20px rgba(0,0,0,.35);
+  font-size: 13px;
+}
+
+/* =========================
+   Loading overlay
+   ========================= */
+
+#sv-loading{
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: rgba(0,0,0,.38);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(1px);
+}
+
+#sv-loading > div{
+  background: var(--card-2);
+  color: #fff;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.14);
+  min-width: 220px;
+  text-align: center;
+  box-shadow: 0 10px 24px rgba(0,0,0,.32);
+}
+
+/* =========================
+   Grid utilitária (ajuda componentes do app)
+   ========================= */
+
+.sv-grid{
+  display: grid;
+  gap: 10px;
+}
+
+.sv-grid-2{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 10px;
+}
+
+.sv-grid-3{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 10px;
+}
+
+.sv-row{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  flex-wrap:wrap;
+}
+
+.sv-row-between{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  justify-content:space-between;
+  flex-wrap:wrap;
+}
+
+.sv-muted{
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sv-muted-2{
+  color: var(--muted-2);
+  font-size: 11px;
+}
+
+/* =========================
+   Stat cards (dashboard)
+   ========================= */
+
+.sv-stat{
+  border:1px solid var(--line);
+  border-radius:12px;
+  padding:10px;
+  background: var(--bg-2);
+}
+
+.sv-stat .label{
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sv-stat .value{
+  color: var(--text);
+  font-size: 24px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+/* =========================
+   Modal genérica (caso você use depois)
+   ========================= */
+
+.sv-modal-backdrop{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+}
+
+.sv-modal{
+  width: min(900px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: #0b1427;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 14px;
+  box-shadow: 0 14px 28px rgba(0,0,0,.35);
+  padding: 14px;
+}
+
+/* =========================
+   Links
+   ========================= */
+
+a{
+  color: #8dc2ff;
+  text-decoration: none;
+}
+
+a:hover{
+  text-decoration: underline;
+}
+
+/* =========================
+   Scrollbar (Chrome/Edge)
+   ========================= */
+
+*::-webkit-scrollbar{
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track{
+  background: #071021;
+}
+*::-webkit-scrollbar-thumb{
+  background: #22385f;
+  border-radius: 999px;
+  border: 2px solid #071021;
+}
+*::-webkit-scrollbar-thumb:hover{
+  background: #2b4a7c;
+}
+
+/* =========================
+   Responsivo
+   ========================= */
+
+@media (max-width: 980px){
+  .sv-grid-3{
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 720px){
+  #sv-top-actions{
+    justify-content: stretch;
+  }
+
+  #sv-top-actions > *{
+    flex: 1 1 auto;
+  }
+
+  .sv-grid-2,
+  .sv-grid-3{
+    grid-template-columns: 1fr;
+  }
+
+  #sv-toast-wrap{
+    left: 12px;
+    right: 12px;
+    max-width: none;
+  }
+}
+
+@media print{
+  #sv-top-actions,
+  #sv-toast-wrap,
+  #sv-loading{
+    display: none !important;
+  }
+
+  body{
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .sv-card,
+  .card{
+    background: #fff !important;
+    color: #000 !important;
+    border: 1px solid #ccc !important;
+    box-shadow: none !important;
+  }
+
+  input, textarea, select, button{
+    border: 1px solid #ccc !important;
+    color: #000 !important;
+    background: #fff !important;
+  }
 }
