@@ -1,144 +1,69 @@
-// db.js - camada de acesso à API / auth / helpers
+// db.js
 (function () {
-  "use strict";
-
-  const TOKEN_KEYS = ["sv_token", "token", "auth_token"];
-  const ME_KEYS = ["sv_me"];
-
-  function getConfig() {
-    const cfg = window.APP_CONFIG || {};
-    let base = (cfg.API_BASE || "").trim();
-
-    // fallback automático para workers.dev se não vier config
-    if (!base) {
-      base = "https://supervenda.krasinskyekuroli.workers.dev";
-    }
-
-    // remove barra final
-    base = base.replace(/\/+$/, "");
-
-    // CORREÇÃO DO MIXED CONTENT:
-    // se a página está em https, força API_BASE em https também
-    if (window.location.protocol === "https:" && base.startsWith("http://")) {
-      base = "https://" + base.slice("http://".length);
-    }
-
-    return { API_BASE: base };
-  }
+  const C = window.CONFIG;
 
   function getToken() {
-    for (const k of TOKEN_KEYS) {
-      const v = localStorage.getItem(k);
-      if (v) return v;
-    }
-    return "";
+    return localStorage.getItem(C.STORAGE_KEYS.TOKEN) || "";
   }
 
   function setToken(token) {
-    TOKEN_KEYS.forEach((k) => localStorage.removeItem(k));
-    if (token) localStorage.setItem("sv_token", token);
+    if (token) localStorage.setItem(C.STORAGE_KEYS.TOKEN, token);
+    else localStorage.removeItem(C.STORAGE_KEYS.TOKEN);
   }
 
-  function clearToken() {
-    TOKEN_KEYS.forEach((k) => localStorage.removeItem(k));
-  }
-
-  function getMeLocal() {
-    for (const k of ME_KEYS) {
-      const raw = localStorage.getItem(k);
-      if (!raw) continue;
-      try {
-        return JSON.parse(raw);
-      } catch (_) {}
-    }
-    return null;
-  }
-
-  function setMeLocal(me) {
-    if (!me) {
-      ME_KEYS.forEach((k) => localStorage.removeItem(k));
-      return;
-    }
-    localStorage.setItem("sv_me", JSON.stringify(me));
-  }
-
-  function clearMeLocal() {
-    ME_KEYS.forEach((k) => localStorage.removeItem(k));
-  }
-
-  function parseMoney(v) {
-    if (typeof v === "number") return isFinite(v) ? v : 0;
-    if (v == null) return 0;
-    let s = String(v).trim();
-    if (!s) return 0;
-
-    // aceita "1.234,56" ou "1234.56"
-    s = s.replace(/\s/g, "");
-    if (s.includes(",") && s.includes(".")) {
-      // assume pt-BR
-      s = s.replace(/\./g, "").replace(",", ".");
-    } else if (s.includes(",")) {
-      s = s.replace(",", ".");
-    }
-
-    const n = Number(s);
-    return isFinite(n) ? n : 0;
-  }
-
-  function money(v) {
-    const n = Number(v || 0);
-    return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-  }
-
-  function safe(text) {
-    return String(text ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-
-  function jparse(v, fallback) {
-    if (v == null) return fallback;
-    if (typeof v !== "string") return v;
+  function getUser() {
     try {
-      return JSON.parse(v);
-    } catch (_) {
-      return fallback;
-    }
-  }
-
-  async function readResponse(res) {
-    const ct = (res.headers.get("content-type") || "").toLowerCase();
-    if (ct.includes("application/json")) {
-      try {
-        return await res.json();
-      } catch (_) {
-        return null;
-      }
-    }
-    try {
-      return await res.text();
-    } catch (_) {
+      return JSON.parse(localStorage.getItem(C.STORAGE_KEYS.USER) || "null");
+    } catch {
       return null;
     }
   }
 
-  function normalizeErrorMessage(payload, status) {
-    if (payload == null) return `Erro HTTP ${status}`;
-    if (typeof payload === "string") return payload || `Erro HTTP ${status}`;
-    return (
-      payload.error ||
-      payload.message ||
-      payload.detail ||
-      payload.msg ||
-      `Erro HTTP ${status}`
-    );
+  function setUser(user) {
+    if (user) localStorage.setItem(C.STORAGE_KEYS.USER, JSON.stringify(user));
+    else localStorage.removeItem(C.STORAGE_KEYS.USER);
   }
 
-  async function api(path, opts = {}) {
-    const { API_BASE } = getConfig();
-    const url = `${API_BASE}${path.startsWith("/") ? path : "/" + path}`;
+  function clearSession() {
+    setToken("");
+    setUser(null);
+  }
+
+  function joinUrl(base, path) {
+    return `${String(base || "").replace(/\/+$/, "")}/${String(path || "").replace(/^\/+/, "")}`;
+  }
+
+  async function parseResponse(res) {
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+
+    if (ct.includes("application/json")) {
+      try {
+        return await res.json();
+      } catch {
+        return null;
+      }
+    }
+
+    try {
+      const text = await res.text();
+      return text ? { raw: text } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function extractErrorMessage(data, fallback) {
+    if (!data) return fallback;
+    if (typeof data === "string") return data;
+    if (data.error && data.detail) return `${data.error}: ${data.detail}`;
+    if (data.error) return String(data.error);
+    if (data.message) return String(data.message);
+    if (data.detail) return String(data.detail);
+    return fallback;
+  }
+
+  async function request(path, opts = {}) {
+    const url = joinUrl(C.API_BASE, path);
 
     const headers = Object.assign(
       { "Content-Type": "application/json" },
@@ -150,106 +75,188 @@
 
     let res;
     try {
-      res = await fetch(url, {
-        ...opts,
-        headers,
-      });
+      res = await fetch(url, { ...opts, headers });
     } catch (err) {
-      // melhora mensagem de erro de rede
-      const msg =
-        err?.message?.includes("Failed to fetch")
-          ? "Falha de rede/fetch. Verifique se a API está em HTTPS e acessível."
-          : err?.message || "Falha de rede.";
-      throw new Error(msg);
+      const e = new Error("Falha de conexão com a API.");
+      e.code = "NETWORK";
+      e.detail = err?.message || String(err);
+      throw e;
     }
 
-    const data = await readResponse(res);
+    const data = await parseResponse(res);
 
     if (!res.ok) {
-      const message = normalizeErrorMessage(data, res.status);
-
-      // limpa sessão se token inválido
-      if (res.status === 401) {
-        // não limpa no bootstrap público? aqui pode limpar para evitar loop
-        // mas deixamos o app decidir em alguns fluxos
-      }
-
-      const err = new Error(message);
-      err.status = res.status;
-      err.payload = data;
-      throw err;
+      const e = new Error(extractErrorMessage(data, `Erro HTTP ${res.status}`));
+      e.status = res.status;
+      e.data = data;
+      throw e;
     }
 
     return data;
   }
 
+  // tenta vários endpoints (fallback)
+  async function requestAny(paths, opts = {}) {
+    let lastErr = null;
+
+    for (const p of paths) {
+      try {
+        const data = await request(p, opts);
+        return { data, path: p };
+      } catch (err) {
+        lastErr = err;
+        // se for 404, tenta próximo endpoint
+        if (err?.status === 404) continue;
+        // outros erros param (401/500 etc)
+        throw err;
+      }
+    }
+
+    throw lastErr || new Error("Rota não encontrada.");
+  }
+
+  // ---------- Auth ----------
   async function login(email, senha) {
-    const r = await api("/api/login", {
+    const data = await request(C.ENDPOINTS.login, {
       method: "POST",
       body: JSON.stringify({ email, senha }),
     });
 
-    // compatível com backend atual: { token, email, name }
-    const token = r?.token || r?.jwt || r?.access_token || "";
-    if (!token) throw new Error("Login sem token retornado pela API.");
+    // suporta formatos diferentes do backend
+    const token = data?.token || data?.access_token || data?.jwt || "";
+    const user =
+      data?.user || {
+        email: data?.email || email,
+        name: data?.name || "Usuário",
+      };
+
+    if (!token) {
+      throw new Error("Login retornou sem token.");
+    }
 
     setToken(token);
-
-    const me = {
-      email: r?.email || email,
-      name: r?.name || r?.nome || "Usuário",
-      id: r?.id || "",
-    };
-    setMeLocal(me);
-
-    return { token, me, raw: r };
+    setUser(user);
+    return { token, user, raw: data };
   }
 
   async function me() {
-    // tenta endpoint /api/me
-    try {
-      const r = await api("/api/me");
-      const payload = {
-        id: r?.id || "",
-        email: r?.email || "",
-        name: r?.name || r?.nome || "Usuário",
-      };
-      setMeLocal(payload);
-      return payload;
-    } catch (e) {
-      // fallback local se existir
-      const local = getMeLocal();
-      if (local) return local;
-      throw e;
-    }
+    return await request(C.ENDPOINTS.me, { method: "GET" });
   }
 
   async function bootstrap() {
-    return api("/api/bootstrap");
+    return await request(C.ENDPOINTS.bootstrap, { method: "GET" });
   }
 
-  async function logoutLocal() {
-    clearToken();
-    clearMeLocal();
+  // ---------- Backup ----------
+  async function backup() {
+    // tenta endpoint de backup; se não existir, faz backup local via múltiplas listas
+    try {
+      const data = await request(C.ENDPOINTS.backup, { method: "GET" });
+      return { mode: "remote", data };
+    } catch (err) {
+      if (err?.status && err.status !== 404) throw err;
+    }
+
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      apiBase: C.API_BASE,
+      user: getUser(),
+      data: {},
+    };
+
+    const resources = [
+      "clientes",
+      "mercadorias",
+      "rotas",
+      "despesas",
+      "lembretes",
+      "pedidos",
+    ];
+
+    for (const r of resources) {
+      try {
+        payload.data[r] = await list(r);
+      } catch (e) {
+        payload.data[r] = { _error: e.message || "Falha ao exportar" };
+      }
+    }
+
+    return { mode: "local", data: payload };
   }
 
-  // expõe no window
+  // ---------- CRUD ----------
+  const resourceMap = {
+    clientes: [C.ENDPOINTS.clientes],
+    mercadorias: [C.ENDPOINTS.mercadorias, C.ENDPOINTS.produtos], // fallback
+    rotas: [C.ENDPOINTS.rotas],
+    despesas: [C.ENDPOINTS.despesas],
+    lembretes: [C.ENDPOINTS.lembretes],
+    pedidos: [C.ENDPOINTS.pedidos],
+  };
+
+  function getResourcePaths(resource) {
+    const paths = resourceMap[resource];
+    if (!paths) throw new Error(`Recurso inválido: ${resource}`);
+    return paths.filter(Boolean);
+  }
+
+  async function list(resource) {
+    const { data } = await requestAny(getResourcePaths(resource), { method: "GET" });
+
+    // backend pode retornar array direto ou objeto com items/data
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.items)) return data.items;
+    if (Array.isArray(data?.data)) return data.data;
+    if (Array.isArray(data?.rows)) return data.rows;
+    return [];
+  }
+
+  async function create(resource, payload) {
+    const { data } = await requestAny(getResourcePaths(resource), {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    return data;
+  }
+
+  async function update(resource, id, payload) {
+    const paths = getResourcePaths(resource).map((p) => `${p}/${encodeURIComponent(id)}`);
+    const { data } = await requestAny(paths, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    return data;
+  }
+
+  async function remove(resource, id) {
+    const paths = getResourcePaths(resource).map((p) => `${p}/${encodeURIComponent(id)}`);
+    const { data } = await requestAny(paths, { method: "DELETE" });
+    return data;
+  }
+
   window.DB = {
-    getConfig,
+    // sessão
     getToken,
     setToken,
-    clearToken,
-    getMeLocal,
-    setMeLocal,
-    clearMeLocal,
-    api,
+    getUser,
+    setUser,
+    clearSession,
+
+    // auth
     login,
     me,
     bootstrap,
-    logoutLocal,
-    parseMoney,
-    money,
-    safe,
-    jparse,
+
+    // CRUD
+    list,
+    create,
+    update,
+    remove,
+
+    // backup
+    backup,
+
+    // baixo nível (útil p/ debug)
+    request,
   };
 })();
