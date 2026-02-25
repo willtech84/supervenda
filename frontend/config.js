@@ -1,46 +1,57 @@
-// frontend/config.js
+// config.js
 (function () {
-  const DEFAULT_API_BASE = "https://supervenda.krasinskyekuroli.workers.dev";
+  const saved = localStorage.getItem("supervenda_api_base") || "";
 
   function normalizeApiBase(url) {
-    if (!url || typeof url !== "string") return DEFAULT_API_BASE;
+    let u = (url || "").trim();
 
-    let u = url.trim();
+    // fallback padrão
+    if (!u) {
+      u = "https://supervenda.krasinskyekuroli.workers.dev";
+    }
+
+    // se vier sem protocolo, força https
+    if (!/^https?:\/\//i.test(u)) {
+      u = "https://" + u.replace(/^\/+/, "");
+    }
 
     // remove barra final
     u = u.replace(/\/+$/, "");
 
-    // se vier sem protocolo, força https
-    if (!/^https?:\/\//i.test(u)) {
-      u = "https://" + u;
-    }
-
-    // se vier http, força https (evita Mixed Content no Pages)
-    u = u.replace(/^http:\/\//i, "https://");
-
     return u;
   }
 
-  function getSavedApiBase() {
-    const saved =
-      localStorage.getItem("API_BASE") ||
-      localStorage.getItem("apiBase") ||
-      "";
-    return normalizeApiBase(saved);
-  }
-
-  function setApiBase(url) {
-    const normalized = normalizeApiBase(url);
-    localStorage.setItem("API_BASE", normalized);
-    localStorage.setItem("apiBase", normalized); // compatibilidade
-    return normalized;
-  }
+  const API_BASE = normalizeApiBase(saved);
 
   window.CONFIG = {
-    API_BASE: getSavedApiBase(),
-    DEFAULT_API_BASE,
-    normalizeApiBase,
-    getSavedApiBase,
-    setApiBase,
+    APP_NAME: "Vendas Externas Pro",
+    API_BASE,
+    STORAGE_KEYS: {
+      TOKEN: "supervenda_token",
+      USER: "supervenda_user",
+      API_BASE: "supervenda_api_base",
+    },
+    ENDPOINTS: {
+      health: "/api/health",
+      login: "/api/login",
+      me: "/api/me",
+      bootstrap: "/api/bootstrap",
+
+      clientes: "/api/clientes",
+      mercadorias: "/api/mercadorias", // se backend usar /produtos, o db.js já tenta fallback
+      produtos: "/api/produtos",
+      rotas: "/api/rotas",
+      despesas: "/api/despesas",
+      lembretes: "/api/lembretes",
+      pedidos: "/api/pedidos",
+
+      backup: "/api/backup",
+    },
+  };
+
+  window.setApiBase = function setApiBase(newBase) {
+    const normalized = normalizeApiBase(newBase);
+    localStorage.setItem(window.CONFIG.STORAGE_KEYS.API_BASE, normalized);
+    window.location.reload();
   };
 })();
