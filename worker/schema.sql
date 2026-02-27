@@ -1,11 +1,14 @@
 PRAGMA foreign_keys = ON;
 
+-- Vendors (vendedores/usuários)
 CREATE TABLE IF NOT EXISTS vendors (
   id TEXT PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'seller',
   password_salt TEXT NOT NULL,
   password_hash TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
 
@@ -20,7 +23,7 @@ CREATE TABLE IF NOT EXISTS clientes (
   id TEXT PRIMARY KEY,
   vendor_id TEXT NOT NULL,
   nome TEXT NOT NULL,
-  telefone TEXT NOT NULL,
+  telefone TEXT NOT NULL DEFAULT '',
   endereco TEXT,
   numero TEXT,
   bairro TEXT,
@@ -60,7 +63,7 @@ CREATE TABLE IF NOT EXISTS pedidos (
   id TEXT PRIMARY KEY,
   vendor_id TEXT NOT NULL,
   data TEXT,
-  clienteId TEXT NOT NULL,
+  clienteId TEXT NOT NULL DEFAULT '',
   clienteNome TEXT,
   urgencia TEXT,
   formaPagamento TEXT,
@@ -123,3 +126,7 @@ CREATE TABLE IF NOT EXISTS rotas (
 CREATE INDEX IF NOT EXISTS idx_clientes_vendor ON clientes(vendor_id);
 CREATE INDEX IF NOT EXISTS idx_produtos_vendor ON produtos(vendor_id);
 CREATE INDEX IF NOT EXISTS idx_pedidos_vendor  ON pedidos(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_despesas_vendor  ON despesas(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_lembretes_vendor ON lembretes(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_rotas_vendor ON rotas(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_notas_vendor ON notas(vendor_id);
