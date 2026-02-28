@@ -70,7 +70,7 @@
 
   function getRoute(id){return ROUTES.find(r=>r.id===id)||ROUTES[0];}
   function navigate(id){
-    state.route=getRoute(id).id; state.ui.search="";
+    state.route=getRoute(id).id; state.ui.search=""; state._clienteId=null;
     location.hash="#"+state.route; renderNav(); renderCurrent(); closeSidebar(); closeMoreDrawer();
   }
   window.closeSidebar=()=>{$("#app-sidebar")?.classList.remove("mobile-open");const b=$("#sidebar-backdrop");if(b)b.style.display="none";};
@@ -285,6 +285,132 @@
   function normalizeItem(resource,item){if(!item)return item;const s=SCHEMAS[resource];return s?.normalizeOut?s.normalizeOut(item):item;}
   function normalizeForSubmit(resource,payload){const s=SCHEMAS[resource];return s?.normalizeIn?s.normalizeIn(payload):payload;}
 
+  // ─── Detalhes do cliente ─────────────────────────────────────────────────────
+  function renderClienteDetalhes(root, clienteId) {
+    const cliente = safeArray(state.cache.clientes).find(c => String(getId(c)) === String(clienteId));
+    if (!cliente) { navigate("clientes"); return; }
+
+    const pedidosCli = safeArray(state.cache.pedidos).filter(p =>
+      String(p.clienteId) === String(clienteId) || String(p.clienteNome||"").toLowerCase() === String(cliente.nome||"").toLowerCase()
+    );
+    const totalGasto = pedidosCli.reduce((a,p)=>a+Number(p.total||0),0);
+    const abertos = pedidosCli.filter(p=>{const s=String(p.status||"").toLowerCase();return !s||s==="aberto"||s==="em andamento"||s==="pendente";});
+    const ultimoPedido = pedidosCli.sort((a,b)=>String(b.created_at||b.data||"").localeCompare(String(a.created_at||a.data||"")))[0];
+
+    // Produtos mais comprados
+    const prodCount = {};
+    pedidosCli.forEach(p => {
+      const itens = Array.isArray(p.itens) ? p.itens : [];
+      itens.forEach(it => {
+        const nome = it.nome || it.produto || it.descricao || "";
+        if (nome) prodCount[nome] = (prodCount[nome]||0) + Number(it.qtd||it.quantidade||1);
+      });
+    });
+    const topProd = Object.entries(prodCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+    root.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+        <button id="btn-back-clientes" class="btn btn-ghost" style="font-size:13px;padding:8px 12px;">← Voltar</button>
+        <div style="font-size:16px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(cliente.nome||"")}</div>
+      </div>
+
+      <!-- Resumo financeiro -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">
+        <div class="stat-card">
+          <div class="stat-icon">💰</div>
+          <div class="stat-label">Total gasto</div>
+          <div style="font-size:16px;font-weight:700;color:var(--green);line-height:1.2;">${moneyBR(totalGasto)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🛒</div>
+          <div class="stat-label">Pedidos</div>
+          <div class="stat-value" style="color:var(--blue);">${pedidosCli.length}</div>
+        </div>
+        <div class="stat-card" style="${abertos.length?'border-color:rgba(255,179,0,.3);':''}">
+          <div class="stat-icon">⏳</div>
+          <div class="stat-label">Em aberto</div>
+          <div class="stat-value" style="color:var(--amber);">${abertos.length}</div>
+        </div>
+      </div>
+
+      <!-- Info do cliente -->
+      <div class="card">
+        <div class="card-title" style="margin-bottom:10px;">📋 Dados do cliente</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;">
+          ${[
+            ["Telefone", cliente.telefone, "📞"],
+            ["Cidade", cliente.cidade ? `${cliente.cidade}${cliente.uf?" - "+cliente.uf:""}` : "", "📍"],
+            ["Endereço", cliente.endereco ? `${cliente.endereco}${cliente.numero?" "+cliente.numero:""}${cliente.bairro?", "+cliente.bairro:""}` : "", "🏠"],
+            ["CPF/CNPJ", cliente.cpfcnpj, "📄"],
+            ["Pagamento", cliente.pagamentoPadrao, "💳"],
+            ["Último pedido", ultimoPedido ? `${dateFormatBR(ultimoPedido.data||ultimoPedido.created_at)}` : "—", "📅"],
+          ].filter(([,v])=>v).map(([l,v,ic])=>`
+            <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;">
+              <div style="font-size:10px;color:var(--muted);margin-bottom:3px;">${ic} ${esc(l)}</div>
+              <div style="font-size:13px;font-weight:500;">${esc(v)}</div>
+            </div>`).join("")}
+        </div>
+        ${cliente.obs?`<div style="margin-top:10px;padding:10px;background:var(--bg2);border-radius:10px;border:1px solid var(--border);font-size:13px;color:var(--muted);">${esc(cliente.obs)}</div>`:""}
+        <div style="margin-top:10px;">
+          <button id="btn-editar-cliente" class="btn btn-secondary" style="font-size:13px;">✏️ Editar cliente</button>
+        </div>
+      </div>
+
+      <!-- Produtos mais comprados -->
+      ${topProd.length?`
+      <div class="card">
+        <div class="card-title" style="margin-bottom:10px;">📦 Produtos mais comprados</div>
+        ${topProd.map(([nome,qtd])=>`
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:var(--bg2);border-radius:9px;border:1px solid var(--border);margin-bottom:6px;">
+            <div style="font-size:13px;font-weight:500;">${esc(nome)}</div>
+            <span class="badge badge-blue">${qtd}x</span>
+          </div>`).join("")}
+      </div>`:""}
+
+      <!-- Histórico de pedidos -->
+      ${pedidosCli.length?`
+      <div class="card">
+        <div class="card-title" style="margin-bottom:10px;">🛒 Histórico de pedidos</div>
+        ${pedidosCli.slice(0,10).map(p=>{
+          const s=String(p.status||"Aberto");
+          const urgColor=urgenciaColor(p.urgencia);
+          return`<div style="padding:10px;background:var(--bg2);border-radius:9px;border:1px solid var(--border);margin-bottom:6px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+              <div>
+                <span class="badge ${getBadgeClass(s)}" style="margin-right:6px;">${esc(s)}</span>
+                ${p.urgencia&&p.urgencia!=="Normal"?`<span style="font-size:11px;font-weight:700;color:${urgColor};">▲${esc(p.urgencia)}</span>`:""}
+              </div>
+              <div style="font-size:13px;font-weight:700;color:var(--green);">${moneyBR(p.total)}</div>
+            </div>
+            <div style="margin-top:6px;font-size:12px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap;">
+              ${p.data?`<span>📅 ${dateFormatBR(p.data)}</span>`:""}
+              ${p.formaPagamento?`<span>💳 ${esc(p.formaPagamento)}</span>`:""}
+              <span style="color:var(--muted2);font-family:var(--mono);font-size:11px;">${esc(p.id||"")}</span>
+            </div>
+            ${p.obs?`<div style="margin-top:6px;font-size:12px;color:var(--muted);">${esc(p.obs)}</div>`:""}
+          </div>`;
+        }).join("")}
+        ${pedidosCli.length>10?`<div style="text-align:center;font-size:12px;color:var(--muted);padding-top:4px;">Exibindo 10 de ${pedidosCli.length} pedidos</div>`:""}
+      </div>`:`
+      <div class="card">
+        <div class="empty-state">
+          <div class="empty-icon">🛒</div>
+          <div class="empty-text">Nenhum pedido encontrado para este cliente.</div>
+        </div>
+      </div>`}
+    `;
+
+    $("#btn-back-clientes")?.addEventListener("click", () => navigate("clientes"));
+    $("#btn-editar-cliente")?.addEventListener("click", () => {
+      navigate("clientes");
+      setTimeout(() => {
+        const rawItems = safeArray(state.cache.clientes);
+        renderForm("clientes", rawItems.find(c => String(getId(c)) === String(clienteId)) || null);
+        setTimeout(() => $("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"}), 80);
+      }, 100);
+    });
+  }
+
   // Render current
   function renderCurrent(){
     const root=$("#sv-screen-root"); if(!root||!DB.getToken()) return;
@@ -292,6 +418,7 @@
     const route=getRoute(state.route);
     if(route.id==="dashboard"){renderDashboard(root);return;}
     if(route.id==="usuarios"){renderUsersScreen(root);return;}
+    if(state._clienteId){renderClienteDetalhes(root,state._clienteId);return;}
     if(route.resource&&SCHEMAS[route.resource]){renderCrudScreen(root,route.resource);return;}
     root.innerHTML=`<div class="card"><p style="color:var(--muted);">Tela em preparação.</p></div>`;
   }
@@ -445,18 +572,30 @@
         return !v?"":`<span style="font-size:12px;color:var(--muted);">${esc(f.label)}: <strong style="color:var(--text);">${esc(String(v))}</strong></span>`;
       }).filter(Boolean).join(" &nbsp;");
 
+      const clickable = resource==="clientes";
       return`<div class="list-item">
         <div class="list-item-top">
-          <div class="list-item-title">${esc(String(pv||""))}</div>
+          <div class="list-item-title" ${clickable?`data-cliente-id="${esc(id)}" style="cursor:pointer;color:var(--green);text-decoration:underline;text-decoration-style:dotted;"`:""}>${esc(String(pv||""))}</div>
           <span class="badge badge-muted" style="font-size:10px;">${esc(id)}</span>
         </div>
         ${metaHtml?`<div style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">${metaHtml}</div>`:""}
         <div class="list-item-actions">
+          ${clickable?`<button class="btn btn-secondary" style="font-size:13px;padding:7px 14px;" data-cliente-ver="${esc(id)}">👁 Ver detalhes</button>`:""}
           <button class="btn btn-secondary" style="font-size:13px;padding:7px 14px;" data-action="edit" data-id="${esc(id)}">✏️ Editar</button>
           <button class="btn btn-danger" style="font-size:13px;padding:7px 14px;" data-action="delete" data-id="${esc(id)}">🗑️</button>
         </div>
       </div>`;
     }).join("");
+
+    // Click no nome ou botão "Ver detalhes" do cliente
+    $$("[data-cliente-id],[data-cliente-ver]",wrap).forEach(el=>{
+      el.addEventListener("click",()=>{
+        const id=el.getAttribute("data-cliente-id")||el.getAttribute("data-cliente-ver");
+        state._clienteId=id;
+        renderCurrent();
+        $("#sv-screen-root")?.scrollIntoView({behavior:"smooth",block:"start"});
+      });
+    });
 
     $$("[data-action='edit']",wrap).forEach(btn=>{
       btn.addEventListener("click",()=>{
@@ -525,6 +664,15 @@
         </div>
         <form id="sv-crud-form">
           <div class="form-grid">${schema.fields.map(f=>renderField(f,itemView?.[f.key])).join("")}</div>
+          ${isEdit&&resource==="mercadorias"?`
+          <div style="margin-bottom:14px;padding:12px;background:var(--blue-bg);border:1px solid rgba(68,136,255,.2);border-radius:10px;">
+            <div style="font-size:12px;font-weight:600;color:var(--blue);margin-bottom:8px;">⚡ Ajustar preço de venda por %</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <input id="sv-pct-input" type="number" step="0.1" placeholder="Ex: 10 ou -5" style="flex:1;min-width:120px;padding:9px 12px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;" />
+              <button type="button" id="sv-pct-apply" class="btn btn-secondary" style="white-space:nowrap;">Aplicar %</button>
+            </div>
+            <div style="font-size:11px;color:var(--muted);margin-top:6px;">Positivo = aumento · Negativo = desconto · Atualiza o campo "Valor venda" acima</div>
+          </div>`:""}
           <div class="form-actions">
             <button type="submit" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Criar"}</button>
             ${isEdit?`<button type="button" id="sv-delete-current" class="btn btn-danger">🗑️ Excluir</button>`:""}
@@ -536,6 +684,19 @@
     $$("input,select,textarea",wrap).forEach(el=>{
       el.addEventListener("focus",()=>{el.style.outline="none";el.style.borderColor="var(--green-dim)";el.style.boxShadow="0 0 0 3px rgba(0,230,118,.08)";});
       el.addEventListener("blur",()=>{el.style.borderColor="var(--border-hi)";el.style.boxShadow="none";});
+    });
+
+    // Ajuste % mercadorias
+    $("#sv-pct-apply")?.addEventListener("click",()=>{
+      const pct=Number(String($("#sv-pct-input")?.value||"").replace(",","."));
+      if(isNaN(pct)||pct===0){toast("Informe um percentual válido (ex: 10 ou -5).","warning");return;}
+      const vendaInput=wrap.querySelector("[name='valor_venda']");
+      if(!vendaInput){toast("Campo valor venda não encontrado.","error");return;}
+      const current=Number(String(vendaInput.value||"0").replace(",","."));
+      if(isNaN(current)||current<=0){toast("Preencha o valor de venda antes de aplicar %.","warning");return;}
+      const novo=current*(1+pct/100);
+      vendaInput.value=novo.toFixed(2).replace(".",",");
+      toast(`✅ Preço ajustado em ${pct>0?"+":""}${pct}%: ${moneyBR(novo)}`,"success");
     });
     $("#sv-close-form")?.addEventListener("click",()=>{wrap.innerHTML="";});
     $("#sv-cancel-form")?.addEventListener("click",()=>{wrap.innerHTML="";});
