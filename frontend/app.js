@@ -186,6 +186,7 @@
       fields:[
         {key:"nome",label:"Nome *",type:"text",required:true},
         {key:"telefone",label:"Telefone",type:"text"},
+        {key:"email",label:"E-mail",type:"email"},
         {key:"cidade",label:"Cidade",type:"text"},
         {key:"endereco",label:"Endereço",type:"text"},
         {key:"bairro",label:"Bairro",type:"text"},
@@ -427,8 +428,11 @@
   function renderDashboard(root){
     const u=DB.getUser();
     const pedidos=safeArray(state.cache.pedidos);
-    const abertos=pedidos.filter(p=>{const s=String(p.status||"").toLowerCase();return !s||s==="aberto"||s==="em andamento"||s==="pendente";});
-    const totalVendas=pedidos.reduce((a,p)=>a+Number(p.total||0),0);
+    // Pedidos ativos = não cancelados
+    const pedidosAtivos=pedidos.filter(p=>{const s=String(p.status||"").toLowerCase();return !s.includes("cancel");});
+    const abertos=pedidosAtivos.filter(p=>{const s=String(p.status||"").toLowerCase();return !s||s==="aberto"||s==="em andamento"||s==="pendente";});
+    // Total de vendas = só pedidos entregues/pagos/concluídos
+    const totalVendas=pedidosAtivos.filter(p=>{const s=String(p.status||"").toLowerCase();return s.includes("entregue")||s.includes("pago")||s.includes("conclu")||s==="";}).reduce((a,p)=>a+Number(p.total||0),0);
     const despesas=safeArray(state.cache.despesas);
     const totalDespesas=despesas.reduce((a,d)=>a+Number(d.valor||0),0);
     const lemPendentes=safeArray(state.cache.lembretes).filter(l=>{const s=String(l.status||"").toLowerCase();return !s.includes("conclu")&&!s.includes("cancel");});
@@ -518,31 +522,46 @@
     const schema=SCHEMAS[resource];
     const cacheKey=resource;
     const rawItems=safeArray(state.cache[cacheKey]);
-    const items=rawItems.map(it=>normalizeItem(resource,it));
-    const q=String(state.ui.search||"").trim().toLowerCase();
-    const filtered=!q?items:items.filter(it=>Object.values(it||{}).some(v=>String(v??"").toLowerCase().includes(q)));
+
+    function getFiltered(){
+      const q=String(state.ui.search||"").trim().toLowerCase();
+      const items=rawItems.map(it=>normalizeItem(resource,it));
+      return !q?items:items.filter(it=>Object.values(it||{}).some(v=>String(v??"").toLowerCase().includes(q)));
+    }
 
     root.innerHTML=`
       <div class="card">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <div class="search-wrap" style="flex:1;min-width:150px;">
             <span class="search-icon">🔍</span>
-            <input id="sv-search-input" type="search" placeholder="Buscar..." value="${esc(state.ui.search)}" />
+            <input id="sv-search-input" type="search" placeholder="Buscar..." value="${esc(state.ui.search)}" autocomplete="off" />
           </div>
           <button id="sv-new-btn" class="btn btn-primary" style="width:auto;">+ Novo</button>
           <button id="sv-refresh-btn" class="btn btn-secondary btn-icon" title="Atualizar">↻</button>
         </div>
-        <div style="margin-top:6px;font-size:12px;color:var(--muted);">${filtered.length} registro${filtered.length!==1?"s":""}</div>
+        <div id="sv-count" style="margin-top:6px;font-size:12px;color:var(--muted);">${getFiltered().length} registro${getFiltered().length!==1?"s":""}</div>
       </div>
       <div id="sv-form-wrap"></div>
       <div id="sv-list-wrap"></div>`;
 
-    $("#sv-search-input")?.addEventListener("input",e=>{state.ui.search=e.target.value||"";renderCrudScreen(root,resource);});
+    // Busca instantânea — ao digitar a primeira letra já filtra
+    const searchInput=$("#sv-search-input");
+    if(searchInput){
+      searchInput.focus();
+      searchInput.addEventListener("input",e=>{
+        state.ui.search=e.target.value||"";
+        const f=getFiltered();
+        const cnt=$("#sv-count");
+        if(cnt) cnt.textContent=`${f.length} registro${f.length!==1?"s":""}`;
+        renderList(resource,f,rawItems);
+      });
+    }
+
     $("#sv-new-btn")?.addEventListener("click",()=>{renderForm(resource,null);setTimeout(()=>$("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"}),60);});
     $("#sv-refresh-btn")?.addEventListener("click",async()=>{
       await runWithUi(async()=>{await loadResource(resource);renderCrudScreen(root,resource);toast("Atualizado.","success");},"Atualizando...");
     });
-    renderList(resource,filtered,rawItems);
+    renderList(resource,getFiltered(),rawItems);
   }
 
   function urgenciaColor(v){const s=String(v||"").toLowerCase();return s==="alta"?"var(--red)":s==="média"?"var(--amber)":s==="baixa"?"var(--blue)":"var(--muted)";}
@@ -626,15 +645,18 @@
   // Form field
   function renderField(f,value){
     const v=value??"";
-    const base=`style="width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;-webkit-appearance:none;"`;
+    const base=`style="width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;-webkit-appearance:none;text-transform:${f.type==="email"||f.type==="money"||f.type==="number"||f.type==="date"?"none":"uppercase"};"`;
     if(f.type==="checkbox") return`<div class="field" style="display:flex;align-items:center;gap:10px;"><input type="checkbox" name="${esc(f.key)}" id="cb-${esc(f.key)}" ${v?"checked":""} style="width:18px;height:18px;accent-color:var(--green);cursor:pointer;"/><label for="cb-${esc(f.key)}" style="font-size:14px;cursor:pointer;">${esc(f.label)}</label></div>`;
-    if(f.type==="textarea") return`<div class="field"><label>${esc(f.label)}</label><textarea name="${esc(f.key)}" rows="3" ${base}>${esc(v)}</textarea></div>`;
-    if(f.type==="select"){const opts=(f.options||[]).map(o=>`<option value="${esc(o)}" ${String(v)===o?"selected":""}>${esc(o)}</option>`).join("");return`<div class="field"><label>${esc(f.label)}</label><select name="${esc(f.key)}" ${base}>${opts}</select></div>`;}
-    if(f.type==="money"){const n=Number(v||0);const d=isNaN(n)||n===0?"":n.toFixed(2).replace(".",",");return`<div class="field"><label>${esc(f.label)}</label><input type="text" inputmode="decimal" name="${esc(f.key)}" value="${esc(d)}" placeholder="0,00" ${base}/></div>`;}
+    if(f.type==="textarea") return`<div class="field"><label>${esc(f.label)}</label><textarea name="${esc(f.key)}" rows="3" ${base} style="width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;text-transform:uppercase;resize:vertical;">${esc(v)}</textarea></div>`;
+    if(f.type==="select"){const opts=(f.options||[]).map(o=>`<option value="${esc(o)}" ${String(v)===o?"selected":""}>${esc(o)}</option>`).join("");return`<div class="field"><label>${esc(f.label)}</label><select name="${esc(f.key)}" style="width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;-webkit-appearance:none;">${opts}</select></div>`;}
+    if(f.type==="money"){const n=Number(v||0);const d=isNaN(n)||n===0?"":n.toFixed(2).replace(".",",");return`<div class="field"><label>${esc(f.label)}</label><input type="text" inputmode="decimal" name="${esc(f.key)}" value="${esc(d)}" placeholder="0,00" style="width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;-webkit-appearance:none;"/></div>`;}
     let out=v;
     if(f.type==="date"&&v){try{const d=new Date(v.includes("T")?v:v+"T12:00:00");if(!isNaN(d.getTime()))out=d.toISOString().slice(0,10);}catch{}}
-    const type=f.type==="number"?"number":f.type==="date"?"date":"text";
-    return`<div class="field"><label>${esc(f.label)}</label><input type="${type}" name="${esc(f.key)}" value="${esc(out)}" ${base}/></div>`;
+    const type=f.type==="number"?"number":f.type==="date"?"date":f.type==="email"?"email":"text";
+    // Email sem uppercase, números e datas sem uppercase
+    const noUpper=type==="email"||type==="number"||type==="date";
+    const inputStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;-webkit-appearance:none;${noUpper?"":"text-transform:uppercase;"}`;
+    return`<div class="field"><label>${esc(f.label)}</label><input type="${type}" name="${esc(f.key)}" value="${esc(noUpper?out:String(out).toUpperCase())}" style="${inputStyle}"/></div>`;
   }
 
   function formToPayload(form,fields){
@@ -643,7 +665,8 @@
       if(f.type==="checkbox"){payload[f.key]=form.querySelector(`[name="${f.key}"]`)?.checked?1:0;return;}
       let v=fd.get(f.key); if(typeof v==="string") v=v.trim();
       if(f.type==="money"||f.type==="number") payload[f.key]=v===""||v==null?0:(Number(String(v).replace(",","."))||0);
-      else payload[f.key]=v??"";
+      else if(f.type==="email"||f.type==="date") payload[f.key]=v??"";
+      else payload[f.key]=v?String(v).toUpperCase():"";
     });
     return payload;
   }
@@ -803,6 +826,18 @@
     $("#menu-toggle")?.addEventListener("click",()=>{$("#app-sidebar")?.classList.add("mobile-open");const b=$("#sidebar-backdrop");if(b)b.style.display="block";});
     $("#sidebar-backup-btn")?.addEventListener("click",doBackup);
     $("#sidebar-logout-btn")?.addEventListener("click",doLogout);
+
+    // Modo claro/escuro
+    const themeBtn=$("#btn-theme");
+    function applyTheme(light){
+      document.body.classList.toggle("light-mode",light);
+      if(themeBtn) themeBtn.textContent=light?"🌙":"☀️";
+      if(themeBtn) themeBtn.title=light?"Modo escuro":"Modo claro";
+      try{localStorage.setItem("sv_theme",light?"light":"dark");}catch{}
+    }
+    const savedTheme=()=>{try{return localStorage.getItem("sv_theme");}catch{return null;}};
+    applyTheme(savedTheme()==="light");
+    themeBtn?.addEventListener("click",()=>applyTheme(!document.body.classList.contains("light-mode")));
     const btnUser=$("#btn-user"),dropdown=$("#user-dropdown");
     if(btnUser&&dropdown){
       btnUser.addEventListener("click",e=>{e.stopPropagation();dropdown.classList.toggle("open");});
@@ -850,6 +885,9 @@
 
   // Init
   async function init(){
+    // Restaurar tema salvo
+    try{if(localStorage.getItem("sv_theme")==="light") document.body.classList.add("light-mode");}catch{}
+
     bindAuthForms();
     if(DB.getToken()){
       try{
