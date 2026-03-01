@@ -439,17 +439,17 @@ export default {
 
           await env.DB.prepare(
             `INSERT INTO clientes
-              (id,vendor_id,nome,telefone,endereco,numero,bairro,cidade,uf,cep,cpfcnpj,pagamentoPadrao,prazoDias,tags,obs,updated_at,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              (id,vendor_id,nome,telefone,email,endereco,numero,bairro,cidade,uf,cep,cpfcnpj,pagamentoPadrao,prazoDias,tags,obs,updated_at,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
-              nome=excluded.nome, telefone=excluded.telefone, endereco=excluded.endereco,
-              numero=excluded.numero, bairro=excluded.bairro, cidade=excluded.cidade,
-              uf=excluded.uf, cep=excluded.cep, cpfcnpj=excluded.cpfcnpj,
+              nome=excluded.nome, telefone=excluded.telefone, email=excluded.email,
+              endereco=excluded.endereco, numero=excluded.numero, bairro=excluded.bairro,
+              cidade=excluded.cidade, uf=excluded.uf, cep=excluded.cep, cpfcnpj=excluded.cpfcnpj,
               pagamentoPadrao=excluded.pagamentoPadrao, prazoDias=excluded.prazoDias,
               tags=excluded.tags, obs=excluded.obs, updated_at=excluded.updated_at`
           ).bind(
             id, vendorId, nome,
-            body.telefone || "", body.endereco || "", body.numero || "",
+            body.telefone || "", body.email || "", body.endereco || "", body.numero || "",
             body.bairro || "", body.cidade || "", body.uf || "", body.cep || "",
             body.cpfcnpj || "", body.pagamentoPadrao || "",
             Number(body.prazoDias || 0), tags, body.obs || "",
@@ -467,11 +467,12 @@ export default {
 
           await env.DB.prepare(
             `UPDATE clientes SET
-              nome=?,telefone=?,endereco=?,numero=?,bairro=?,cidade=?,uf=?,cep=?,
+              nome=?,telefone=?,email=?,endereco=?,numero=?,bairro=?,cidade=?,uf=?,cep=?,
               cpfcnpj=?,pagamentoPadrao=?,prazoDias=?,tags=?,obs=?,updated_at=?
             WHERE id=? AND vendor_id=?`
           ).bind(
-            body.nome || "", body.telefone || "", body.endereco || "", body.numero || "",
+            body.nome || "", body.telefone || "", body.email || "",
+            body.endereco || "", body.numero || "",
             body.bairro || "", body.cidade || "", body.uf || "", body.cep || "",
             body.cpfcnpj || "", body.pagamentoPadrao || "",
             Number(body.prazoDias || 0), tags, body.obs || "",
