@@ -801,11 +801,11 @@ export default {
           const paradas = JSON.stringify(body.paradas || []);
 
           await env.DB.prepare(
-            `INSERT INTO rotas (id,vendor_id,data,obs,paradas,updated_at,created_at)
-            VALUES (?,?,?,?,?,?,?)
+            `INSERT INTO rotas (id,vendor_id,nome,data,obs,paradas,updated_at,created_at)
+            VALUES (?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
-              data=excluded.data, obs=excluded.obs, paradas=excluded.paradas, updated_at=excluded.updated_at`
-          ).bind(id, vendorId, body.data || "", body.obs || "", paradas, nowISO(), nowISO()).run();
+              nome=excluded.nome, data=excluded.data, obs=excluded.obs, paradas=excluded.paradas, updated_at=excluded.updated_at`
+          ).bind(id, vendorId, body.nome||"", body.data || "", body.obs || "", paradas, nowISO(), nowISO()).run();
 
           const row = await env.DB.prepare("SELECT * FROM rotas WHERE id=? AND vendor_id=?")
             .bind(id, vendorId).first<any>();
@@ -817,8 +817,8 @@ export default {
           const paradas = JSON.stringify(body.paradas || []);
 
           await env.DB.prepare(
-            `UPDATE rotas SET data=?,obs=?,paradas=?,updated_at=? WHERE id=? AND vendor_id=?`
-          ).bind(body.data || "", body.obs || "", paradas, nowISO(), p[2], vendorId).run();
+            `UPDATE rotas SET nome=?,data=?,obs=?,paradas=?,updated_at=? WHERE id=? AND vendor_id=?`
+          ).bind(body.nome||"", body.data || "", body.obs || "", paradas, nowISO(), p[2], vendorId).run();
 
           const row = await env.DB.prepare("SELECT * FROM rotas WHERE id=? AND vendor_id=?")
             .bind(p[2], vendorId).first<any>();
