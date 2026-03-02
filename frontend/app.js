@@ -486,15 +486,28 @@
       ${abertos.length?`
       <div class="card">
         <div class="card-title" style="margin-bottom:10px;">🛒 Pedidos em aberto (${abertos.length})</div>
-        ${abertos.slice(0,5).map(p=>{
+        ${abertos.slice(0,8).map(p=>{
           const urg=String(p.urgencia||"Normal");
           const urgColor=urg==="Alta"?"var(--red)":urg==="Média"?"var(--amber)":urg==="Baixa"?"var(--blue)":"var(--muted)";
-          return`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:var(--bg2);border-radius:9px;border:1px solid var(--border);margin-bottom:6px;cursor:pointer;" onclick="SuperVendaApp.navigate('pedidos')">
-            <div><div style="font-size:13px;font-weight:600;">${esc(p.clienteNome||"")}</div>${p.data?`<div style="font-size:11px;color:var(--muted);">${dateFormatBR(p.data)}</div>`:""}</div>
-            <div style="text-align:right;flex-shrink:0;"><div style="font-size:13px;font-weight:600;color:var(--green);">${moneyBR(p.total)}</div><div style="font-size:11px;font-weight:600;color:${urgColor};">${esc(urg)}</div></div>
+          const pid=esc(getId(p));
+          return`<div style="background:var(--bg2);border-radius:9px;border:1px solid var(--border);margin-bottom:8px;overflow:hidden;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;cursor:pointer;" onclick="SuperVendaApp.navigate('pedidos')">
+              <div><div style="font-size:13px;font-weight:600;">${esc(p.clienteNome||"")}</div>${p.data?`<div style="font-size:11px;color:var(--muted);">${dateFormatBR(p.data)}</div>`:""}</div>
+              <div style="text-align:right;flex-shrink:0;"><div style="font-size:13px;font-weight:600;color:var(--green);">${moneyBR(p.total)}</div><div style="font-size:11px;font-weight:600;color:${urgColor};">${esc(urg)}</div></div>
+            </div>
+            <div style="display:flex;gap:0;border-top:1px solid var(--border);">
+              <button class="btn-dash-acao" data-ped-id="${pid}" data-ped-acao="concluir"
+                style="flex:1;padding:7px;background:rgba(0,230,118,.08);border:none;border-right:1px solid var(--border);color:var(--green);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;">
+                ✅ Concluir
+              </button>
+              <button class="btn-dash-acao" data-ped-id="${pid}" data-ped-acao="cancelar"
+                style="flex:1;padding:7px;background:rgba(255,82,82,.06);border:none;color:var(--red);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;">
+                ✕ Cancelar
+              </button>
+            </div>
           </div>`;
         }).join("")}
-        ${abertos.length>5?`<div style="text-align:center;font-size:12px;color:var(--muted);padding-top:4px;">+${abertos.length-5} pedidos</div>`:""}
+        ${abertos.length>8?`<div style="text-align:center;font-size:12px;color:var(--muted);padding-top:4px;">+${abertos.length-8} pedidos</div>`:""}
       </div>`:""}
 
       ${lemPendentes.length?`
@@ -521,6 +534,26 @@
         }).join("")}
       </div>`:""}
     `;
+
+    // Botões Concluir / Cancelar do dashboard
+    $$(`.btn-dash-acao`,root).forEach(btn=>{
+      btn.addEventListener("click",async e=>{
+        e.stopPropagation();
+        const id=btn.getAttribute("data-ped-id");
+        const acao=btn.getAttribute("data-ped-acao");
+        const novoStatus=acao==="concluir"?"Entregue":"Cancelado";
+        const msg=acao==="concluir"?"Marcar pedido como Entregue?":"Cancelar este pedido?";
+        if(!confirm(msg)) return;
+        const pedido=safeArray(state.cache.pedidos).find(p=>String(getId(p))===String(id));
+        if(!pedido) return;
+        await runWithUi(async()=>{
+          await DB.update("pedidos",id,{...pedido,status:novoStatus});
+          await loadResource("pedidos");
+          renderDashboard(root);
+          toast(`✅ Pedido ${novoStatus.toLowerCase()}.`,"success");
+        },"Atualizando...");
+      });
+    });
   }
 
   // CRUD screen
@@ -545,6 +578,15 @@
           <button id="sv-new-btn" class="btn btn-primary" style="width:auto;">+ Novo</button>
           <button id="sv-refresh-btn" class="btn btn-secondary btn-icon" title="Atualizar">↻</button>
         </div>
+        ${resource==="mercadorias"?`
+        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+          <button id="sv-export-btn" class="btn btn-secondary" style="font-size:12px;">📤 Exportar CSV</button>
+          <label id="sv-import-label" class="btn btn-secondary" style="font-size:12px;cursor:pointer;margin:0;">
+            📥 Importar CSV/Excel
+            <input type="file" id="sv-import-file" accept=".csv,.xlsx,.xls" style="display:none;"/>
+          </label>
+          <span style="font-size:11px;color:var(--muted);align-self:center;">Colunas esperadas: nome, marca, categoria, codigo, valor_compra, valor_venda, estoque, estoqueMin</span>
+        </div>`:""}
         <div id="sv-count" style="margin-top:6px;font-size:12px;color:var(--muted);">${getFiltered().length} registro${getFiltered().length!==1?"s":""}</div>
       </div>
       <div id="sv-form-wrap"></div>
@@ -567,6 +609,83 @@
     $("#sv-refresh-btn")?.addEventListener("click",async()=>{
       await runWithUi(async()=>{await loadResource(resource);renderCrudScreen(root,resource);toast("Atualizado.","success");},"Atualizando...");
     });
+
+    // Exportar CSV (mercadorias)
+    if(resource==="mercadorias"){
+      $("#sv-export-btn")?.addEventListener("click",()=>{
+        const items=rawItems.map(it=>normalizeItem("mercadorias",it));
+        const cols=["nome","marca","categoria","codigo","valor_compra","valor_venda","estoque","estoqueMin","descricao"];
+        const header=cols.join(";");
+        const rows=items.map(m=>cols.map(c=>{
+          const v=m[c]??"";
+          return typeof v==="string"&&v.includes(";")?`"${v}"`:v;
+        }).join(";"));
+        const csv="\uFEFF"+[header,...rows].join("\n"); // BOM para Excel PT-BR
+        const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+        const a=Object.assign(document.createElement("a"),{href:URL.createObjectURL(blob),download:`mercadorias_${new Date().toISOString().slice(0,10)}.csv`});
+        a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+        toast(`✅ ${items.length} produtos exportados.`,"success");
+      });
+
+      // Importar CSV ou Excel
+      $("#sv-import-file")?.addEventListener("change",async e=>{
+        const file=e.target.files[0]; if(!file) return;
+        e.target.value="";
+        const ext=file.name.split(".").pop().toLowerCase();
+
+        async function processRows(rows){
+          if(!rows.length){toast("Arquivo vazio ou sem dados reconhecíveis.","warning");return;}
+          const ok=[];const erros=[];
+          for(const row of rows){
+            const nome=String(row.nome||row.Produto||row.produto||row.NOME||"").trim().toUpperCase();
+            if(!nome){erros.push("Linha sem nome ignorada");continue;}
+            const payload={
+              nome, produto:nome,
+              marca:String(row.marca||row.Marca||"").toUpperCase(),
+              categoria:String(row.categoria||row.Categoria||"").toUpperCase(),
+              codigo:String(row.codigo||row.sku||row.Codigo||row.SKU||"").toUpperCase(),
+              valor_compra:Number(String(row.valor_compra||row.valorCompra||row["Valor compra"]||0).replace(",","."))||0,
+              valor_venda:Number(String(row.valor_venda||row.valorVenda||row["Valor venda"]||0).replace(",","."))||0,
+              estoque:Number(row.estoque||row.Estoque||row.estoqueAtual||0)||0,
+              estoqueMin:Number(row.estoqueMin||row["Estoque minimo"]||row["Estoque mínimo"]||0)||0,
+              descricao:String(row.descricao||row.Descrição||row.descricao||""),
+              valorCompra:Number(String(row.valor_compra||row.valorCompra||0).replace(",","."))||0,
+              valorVenda:Number(String(row.valor_venda||row.valorVenda||0).replace(",","."))||0,
+              estoqueAtual:Number(row.estoque||row.estoqueAtual||0)||0,
+              sku:String(row.codigo||row.sku||""),
+            };
+            try{
+              // Tentar encontrar produto existente pelo nome para atualizar
+              const existente=rawItems.find(m=>String(m.nome||m.produto||"").toUpperCase()===nome);
+              if(existente) await DB.update("mercadorias",getId(existente),payload);
+              else await DB.create("mercadorias",payload);
+              ok.push(nome);
+            }catch(err){erros.push(`${nome}: ${err?.message||"erro"}`);}
+          }
+          await loadResource("mercadorias");
+          renderCrudScreen(root,"mercadorias");
+          toast(`✅ ${ok.length} produto${ok.length!==1?"s":""} importado${ok.length!==1?"s":""}${erros.length?` · ⚠️ ${erros.length} erro(s)`:""}`, ok.length?"success":"warning", 6000);
+          if(erros.length) console.warn("Erros na importação:",erros);
+        }
+
+        if(ext==="csv"){
+          const text=await file.text();
+          const lines=text.replace(/\r/g,"").split("\n").filter(l=>l.trim());
+          if(lines.length<2){toast("CSV sem dados.","warning");return;}
+          const sep=lines[0].includes(";")?";":lines[0].includes("\t")?"\t":",";
+          const headers=lines[0].split(sep).map(h=>h.trim().replace(/^"|"$/g,""));
+          const rows=lines.slice(1).map(line=>{
+            const vals=line.split(sep).map(v=>v.trim().replace(/^"|"$/g,""));
+            const obj={};headers.forEach((h,i)=>obj[h]=vals[i]||"");return obj;
+          });
+          await runWithUi(()=>processRows(rows),"Importando CSV...");
+        } else {
+          // Excel via FileReader + parse manual simplificado (sem lib)
+          toast("Para Excel, salve como CSV (separado por ponto-e-vírgula) e importe novamente. O CSV é compatível com Excel.","warning",6000);
+        }
+      });
+    }
+
     renderList(resource,getFiltered(),rawItems);
   }
 
@@ -648,6 +767,31 @@
     return "badge-blue";
   }
 
+  // Máscaras de input
+  function aplicarMascaras(wrap){
+    // Telefone: (00) 00000-0000 ou (00) 0000-0000
+    wrap.querySelectorAll("[name='telefone']").forEach(el=>{
+      el.setAttribute("inputmode","tel");
+      el.setAttribute("placeholder","(00) 00000-0000");
+      el.addEventListener("input",()=>{
+        let v=el.value.replace(/\D/g,"").slice(0,11);
+        if(v.length<=10) v=v.replace(/^(\d{2})(\d{4})(\d{0,4})$/,"($1) $2-$3");
+        else             v=v.replace(/^(\d{2})(\d{5})(\d{0,4})$/,"($1) $2-$3");
+        el.value=v.replace(/-$/,"");
+      });
+    });
+    // CEP: 00000-000
+    wrap.querySelectorAll("[name='cep']").forEach(el=>{
+      el.setAttribute("inputmode","numeric");
+      el.setAttribute("placeholder","00000-000");
+      el.addEventListener("input",()=>{
+        let v=el.value.replace(/\D/g,"").slice(0,8);
+        if(v.length>5) v=v.replace(/^(\d{5})(\d{0,3})$/,"$1-$2");
+        el.value=v;
+      });
+    });
+  }
+
   // Form field
   function renderField(f,value){
     const v=value??"";
@@ -669,8 +813,19 @@
     if(f.type==="date"&&v){try{const d=new Date(v.includes("T")?v:v+"T12:00:00");if(!isNaN(d.getTime()))out=d.toISOString().slice(0,10);}catch{}}
     const type=f.type==="number"?"number":f.type==="date"?"date":f.type==="email"?"email":"text";
     const noUpper=type==="email"||type==="number"||type==="date";
-    const inputStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;-webkit-appearance:none;${noUpper?"":"text-transform:uppercase;"}`;
-    return`<div class="field"><label>${esc(f.label)}</label><input type="${type}" name="${esc(f.key)}" value="${esc(noUpper?out:String(out).toUpperCase())}" style="${inputStyle}"/></div>`;
+    // Formatar telefone e CEP na exibição
+    let displayVal=noUpper?out:String(out).toUpperCase();
+    if(f.key==="telefone"&&displayVal){
+      const d=displayVal.replace(/\D/g,"");
+      if(d.length===11) displayVal=d.replace(/^(\d{2})(\d{5})(\d{4})$/,"($1) $2-$3");
+      else if(d.length===10) displayVal=d.replace(/^(\d{2})(\d{4})(\d{4})$/,"($1) $2-$3");
+    }
+    if(f.key==="cep"&&displayVal){
+      const d=displayVal.replace(/\D/g,"");
+      if(d.length===8) displayVal=d.replace(/^(\d{5})(\d{3})$/,"$1-$2");
+    }
+    const inputStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;-webkit-appearance:none;${noUpper||f.key==="telefone"||f.key==="cep"?"":"text-transform:uppercase;"}`;
+    return`<div class="field"><label>${esc(f.label)}</label><input type="${type}" name="${esc(f.key)}" value="${esc(displayVal)}" style="${inputStyle}"/></div>`;
   }
 
   // Bind autocomplete fields after form render
@@ -775,6 +930,7 @@
     });
 
     bindAutocomplete(wrap,schema);
+    aplicarMascaras(wrap);
 
     // Ajuste % mercadorias
     $("#sv-pct-apply")?.addEventListener("click",()=>{
@@ -1203,6 +1359,7 @@
         <div class="footer">
           <p>Este orçamento é válido por 30 dias a partir da data de emissão.</p>
           <p style="margin-top:4px;">Gerado por Supervenda · ${esc(nomeVendedor)} · ${dataEmissao}</p>
+          <p style="margin-top:6px;font-size:10px;color:#aaa;">Desenvolvido por Willtech84</p>
         </div>
       </div></body></html>`);
       win.document.close();
