@@ -731,7 +731,11 @@
     return payload;
   }
 
+
   function renderForm(resource,item){
+    // Pedidos tem tela especial com montagem de itens
+    if(resource==="pedidos"){renderFormPedido(item);return;}
+
     const wrap=$("#sv-form-wrap"); if(!wrap) return;
     const schema=SCHEMAS[resource];
     const isEdit=!!item;
@@ -746,7 +750,6 @@
           <button id="sv-close-form" class="btn btn-ghost btn-icon">✕</button>
         </div>
         <form id="sv-crud-form">
-          ${resource==="pedidos"?`<input type="hidden" name="clienteId" value="${esc(itemView?.clienteId||"")}" />`:""}
           <div class="form-grid">${schema.fields.map(f=>renderField(f,itemView?.[f.key])).join("")}</div>
           ${isEdit&&resource==="mercadorias"?`
           <div style="margin-bottom:14px;padding:12px;background:var(--blue-bg);border:1px solid rgba(68,136,255,.2);border-radius:10px;">
@@ -770,7 +773,6 @@
       el.addEventListener("blur",()=>{el.style.borderColor="var(--border-hi)";el.style.boxShadow="none";});
     });
 
-    // Autocomplete
     bindAutocomplete(wrap,schema);
 
     // Ajuste % mercadorias
@@ -807,6 +809,434 @@
       $("#sv-delete-current")?.addEventListener("click",async()=>{
         if(!confirm("Excluir este registro?")) return;
         await runWithUi(async()=>{await DB.remove(apiR,itemId);await loadResource(resource);wrap.innerHTML="";renderCurrent();toast("✅ Excluído.","success");},"Excluindo...");
+      });
+    }
+  }
+
+  // ─── FORM PEDIDO ESPECIAL (com itens do estoque + orçamento PDF) ─────────────
+  function renderFormPedido(item){
+    const wrap=$("#sv-form-wrap"); if(!wrap) return;
+    const isEdit=!!item;
+    const itemId=isEdit?getId(item):"";
+    const mercadorias=safeArray(state.cache.mercadorias).map(m=>normalizeItem("mercadorias",m));
+    const clientes=safeArray(state.cache.clientes);
+
+    // Estado dos itens do pedido
+    const pedidoItens=[];
+    if(isEdit&&Array.isArray(item.itens)){
+      item.itens.forEach(it=>pedidoItens.push({
+        id:getId(it)||String(Math.random()),
+        nome:it.nome||it.produto||"",
+        codigo:it.codigo||it.sku||"",
+        qtd:Number(it.qtd||it.quantidade||1),
+        valorUnit:Number(it.valorUnit||it.valor||it.valorVenda||0),
+        desconto:Number(it.desconto||0),
+      }));
+    }
+
+    const inStyle="width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;text-transform:uppercase;";
+    const inStyleSm="padding:8px 10px;background:var(--bg);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;width:100%;";
+
+    function calcTotal(){
+      return pedidoItens.reduce((a,it)=>a+it.qtd*it.valorUnit*(1-it.desconto/100),0);
+    }
+
+    function renderItens(){
+      const tbody=$("#ped-itens-tbody"); if(!tbody) return;
+      if(!pedidoItens.length){
+        tbody.innerHTML=`<div style="padding:16px;text-align:center;color:var(--muted);font-size:13px;">Nenhum item. Use o catálogo abaixo ou adicione manualmente.</div>`;
+      } else {
+        tbody.innerHTML=pedidoItens.map((it,i)=>{
+          const sub=it.qtd*it.valorUnit*(1-it.desconto/100);
+          return`<div style="display:grid;grid-template-columns:1fr auto auto auto auto;gap:6px;align-items:center;padding:8px;background:var(--bg2);border-radius:9px;border:1px solid var(--border);margin-bottom:6px;">
+            <div>
+              <div style="font-size:13px;font-weight:600;">${esc(it.nome)}</div>
+              ${it.codigo?`<div style="font-size:11px;color:var(--muted);">${esc(it.codigo)}</div>`:""}
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <label style="font-size:10px;color:var(--muted);">Qtd</label>
+              <input type="number" min="0.01" step="0.01" value="${it.qtd}" data-item-field="qtd" data-item-idx="${i}" style="${inStyleSm}width:60px;text-align:center;"/>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <label style="font-size:10px;color:var(--muted);">Unit R$</label>
+              <input type="text" inputmode="decimal" value="${it.valorUnit.toFixed(2).replace(".",",")}" data-item-field="valorUnit" data-item-idx="${i}" style="${inStyleSm}width:80px;text-align:right;"/>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <label style="font-size:10px;color:var(--muted);">Desc%</label>
+              <input type="number" min="0" max="100" step="0.1" value="${it.desconto}" data-item-field="desconto" data-item-idx="${i}" style="${inStyleSm}width:55px;text-align:center;"/>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
+              <label style="font-size:10px;color:var(--muted);">Total</label>
+              <div style="font-size:13px;font-weight:700;color:var(--green);white-space:nowrap;">${moneyBR(sub)}</div>
+              <button type="button" data-remove-idx="${i}" style="background:transparent;border:none;color:var(--red);font-size:16px;cursor:pointer;padding:0;line-height:1;">✕</button>
+            </div>
+          </div>`;
+        }).join("");
+      }
+      const t=calcTotal();
+      const totEl=$("#ped-total-display"); if(totEl) totEl.textContent=moneyBR(t);
+      const totInput=wrap.querySelector("[name='total']"); if(totInput) totInput.value=t.toFixed(2).replace(".",",");
+
+      $$("[data-item-field]",tbody).forEach(el=>{
+        el.addEventListener("change",()=>{
+          const i=Number(el.getAttribute("data-item-idx"));
+          const field=el.getAttribute("data-item-field");
+          if(field==="valorUnit") pedidoItens[i].valorUnit=Number(String(el.value).replace(",","."))||0;
+          else pedidoItens[i][field]=Number(el.value)||0;
+          renderItens();
+        });
+      });
+      $$("[data-remove-idx]",tbody).forEach(btn=>{
+        btn.addEventListener("click",()=>{pedidoItens.splice(Number(btn.getAttribute("data-remove-idx")),1);renderItens();});
+      });
+    }
+
+    function addItemManual(){
+      const nome=String(wrap.querySelector("#ped-item-nome")?.value||"").trim().toUpperCase();
+      const qtd=Number(String(wrap.querySelector("#ped-item-qtd")?.value||"1").replace(",","."))||1;
+      const val=Number(String(wrap.querySelector("#ped-item-val")?.value||"0").replace(",","."))||0;
+      if(!nome){toast("Informe o nome do item.","warning");return;}
+      pedidoItens.push({id:String(Math.random()),nome,codigo:"",qtd,valorUnit:val,desconto:0});
+      wrap.querySelector("#ped-item-nome").value="";
+      wrap.querySelector("#ped-item-qtd").value="1";
+      wrap.querySelector("#ped-item-val").value="";
+      renderItens();
+    }
+
+    function addFromEstoque(m){
+      const nomeUp=String(m.nome||m.produto||"").toUpperCase();
+      const exists=pedidoItens.find(it=>it.nome===nomeUp);
+      if(exists){exists.qtd++;renderItens();toast(`+1 ${nomeUp}`,"info",1500);return;}
+      pedidoItens.push({id:getId(m)||String(Math.random()),nome:nomeUp,codigo:String(m.codigo||m.sku||""),qtd:1,valorUnit:Number(m.valor_venda||m.valorVenda||0),desconto:0});
+      renderItens();
+      toast(`✅ ${nomeUp} adicionado`,"success",1500);
+    }
+
+    function renderCatalogo(q){
+      const cat=$("#ped-catalogo"); if(!cat) return;
+      const filtered=!q?mercadorias:mercadorias.filter(m=>
+        String(m.nome||m.produto||"").toLowerCase().includes(q.toLowerCase())||
+        String(m.codigo||m.sku||"").toLowerCase().includes(q.toLowerCase())||
+        String(m.marca||"").toLowerCase().includes(q.toLowerCase())
+      );
+      if(!filtered.length){cat.innerHTML=`<div style="padding:12px;text-align:center;color:var(--muted);font-size:13px;">Nenhum produto encontrado.</div>`;return;}
+      cat.innerHTML=filtered.slice(0,30).map(m=>{
+        const est=Number(m.estoqueAtual??m.estoque??0),min=Number(m.estoqueMin??0),alerta=min>0&&est<=min;
+        const val=Number(m.valor_venda||m.valorVenda||0);
+        return`<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);border:1px solid ${alerta?"rgba(255,179,0,.3)":"var(--border)"};border-radius:8px;margin-bottom:4px;" data-add-merc="${esc(getId(m)||"")}">
+          <div style="flex:1;overflow:hidden;">
+            <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.nome||m.produto||"")}</div>
+            <div style="font-size:11px;color:var(--muted);">${esc(m.marca||"")} ${m.codigo?`· ${esc(m.codigo)}`:""}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <div style="font-size:13px;font-weight:700;color:var(--green);">${moneyBR(val)}</div>
+            <div style="font-size:10px;color:${alerta?"var(--amber)":"var(--muted)"};">${alerta?"⚠️ ":""}Est:${est}</div>
+          </div>
+          <button type="button" style="background:var(--green-bg);border:1px solid rgba(0,230,118,.2);border-radius:8px;color:var(--green);padding:6px 10px;font-size:18px;cursor:pointer;flex-shrink:0;">+</button>
+        </div>`;
+      }).join("");
+      $$("[data-add-merc]",cat).forEach(el=>{
+        const addBtn=el.querySelector("button");
+        const handler=()=>{const id=el.getAttribute("data-add-merc");const m=mercadorias.find(x=>String(getId(x))===String(id));if(m)addFromEstoque(m);};
+        el.addEventListener("click",handler);
+        addBtn?.addEventListener("click",e=>{e.stopPropagation();handler();});
+      });
+    }
+
+    const hoje=new Date().toISOString().slice(0,10);
+    const clienteNomeAtual=isEdit?String(item.clienteNome||"").toUpperCase():"";
+    const clienteIdAtual=isEdit?String(item.clienteId||""):"";
+
+    wrap.innerHTML=`
+      <div class="form-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+          <div style="font-size:15px;font-weight:600;">${isEdit?"✏️ Editar":"➕ Novo"} Pedido</div>
+          <button id="sv-close-form" class="btn btn-ghost btn-icon">✕</button>
+        </div>
+        <form id="sv-crud-form">
+          <input type="hidden" name="clienteId" id="ped-clienteId" value="${esc(clienteIdAtual)}" />
+          <div class="form-grid">
+            <div class="field" style="position:relative;">
+              <label>Cliente *</label>
+              <input type="text" name="clienteNome" id="ac-clienteNome" value="${esc(clienteNomeAtual)}" placeholder="Digite para buscar..." autocomplete="off" style="${inStyle}"/>
+              <div id="ac-drop-clienteNome" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg2);border:1px solid var(--border-hi);border-radius:9px;z-index:999;max-height:200px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.3);margin-top:2px;"></div>
+            </div>
+            <div class="field">
+              <label>Data</label>
+              <input type="date" name="data" value="${isEdit?String(item.data||"").slice(0,10):hoje}" style="${inStyle}text-transform:none;"/>
+            </div>
+            <div class="field">
+              <label>Urgência</label>
+              <select name="urgencia" style="${inStyle}text-transform:none;">
+                ${URGENCIA_OPTS.map(o=>`<option ${(item?.urgencia||"Normal")===o?"selected":""}>${esc(o)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label>Forma pagamento</label>
+              <input type="text" name="formaPagamento" value="${esc(String(item?.formaPagamento||"").toUpperCase())}" style="${inStyle}"/>
+            </div>
+            <div class="field">
+              <label>Status</label>
+              <select name="status" style="${inStyle}text-transform:none;">
+                ${STATUS_PEDIDO.map(o=>`<option ${(item?.status||"Aberto")===o?"selected":""}>${esc(o)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label>Observação</label>
+              <textarea name="obs" rows="2" style="${inStyle}resize:vertical;">${esc(item?.obs||"")}</textarea>
+            </div>
+          </div>
+
+          <div style="background:var(--bg2);border:1px solid var(--border-hi);border-radius:12px;padding:14px;margin-bottom:14px;">
+            <div style="font-size:14px;font-weight:700;margin-bottom:10px;">📋 Itens do pedido</div>
+            <div id="ped-itens-tbody"></div>
+            <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+              <span style="font-size:13px;color:var(--muted);">Total:</span>
+              <span id="ped-total-display" style="font-size:20px;font-weight:700;color:var(--green);">${moneyBR(calcTotal())}</span>
+            </div>
+            <input type="hidden" name="total" value="${calcTotal().toFixed(2).replace(".",",")}"/>
+          </div>
+
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px;">
+            <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;">➕ Adicionar item manualmente</div>
+            <div style="display:grid;grid-template-columns:1fr 70px 100px auto;gap:6px;align-items:flex-end;">
+              <div><label style="font-size:11px;color:var(--muted);">Produto</label><input type="text" id="ped-item-nome" placeholder="Nome do item" style="${inStyleSm}"/></div>
+              <div><label style="font-size:11px;color:var(--muted);">Qtd</label><input type="number" id="ped-item-qtd" value="1" min="0.01" step="0.01" style="${inStyleSm}text-align:center;"/></div>
+              <div><label style="font-size:11px;color:var(--muted);">Valor unit.</label><input type="text" inputmode="decimal" id="ped-item-val" placeholder="0,00" style="${inStyleSm}text-align:right;"/></div>
+              <button type="button" id="ped-add-manual" class="btn btn-secondary" style="padding:9px 12px;white-space:nowrap;">+ Add</button>
+            </div>
+          </div>
+
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:14px;">
+            <div style="font-size:14px;font-weight:700;margin-bottom:10px;">📦 Catálogo do estoque</div>
+            <input type="text" id="ped-cat-search" placeholder="Buscar produto..." style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:13px;margin-bottom:10px;"/>
+            <div id="ped-catalogo" style="max-height:260px;overflow-y:auto;"></div>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Criar"} pedido</button>
+            ${!isEdit?`<button type="button" id="btn-salvar-orcamento" class="btn btn-secondary" style="width:auto;">📄 Salvar e gerar orçamento</button>`:""}
+            ${isEdit?`<button type="button" id="btn-gerar-orcamento" class="btn btn-secondary" style="width:auto;">📄 Gerar orçamento</button>`:""}
+            ${isEdit?`<button type="button" id="sv-delete-current" class="btn btn-danger">🗑️ Excluir</button>`:""}
+            <button type="button" id="sv-cancel-form" class="btn btn-ghost">Cancelar</button>
+          </div>
+        </form>
+      </div>`;
+
+    renderItens();
+    renderCatalogo("");
+
+    // Autocomplete cliente
+    const acInput=wrap.querySelector("#ac-clienteNome");
+    const acDrop=wrap.querySelector("#ac-drop-clienteNome");
+    if(acInput&&acDrop){
+      function showCliDrop(q){
+        const qq=q.trim().toLowerCase();
+        const matches=clientes.filter(c=>!qq||String(c.nome||"").toLowerCase().includes(qq)).slice(0,10);
+        if(!matches.length){acDrop.style.display="none";return;}
+        acDrop.innerHTML=matches.map(c=>`
+          <div data-ac-cli="${esc(getId(c))}" data-ac-nome="${esc(String(c.nome||"").toUpperCase())}" data-ac-pag="${esc(c.pagamentoPadrao||"")}"
+            style="padding:10px 14px;cursor:pointer;font-size:14px;border-bottom:1px solid var(--border);"
+            onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
+            ${esc(String(c.nome||"").toUpperCase())}
+            ${c.cidade?`<span style="font-size:11px;color:var(--muted);margin-left:8px;">${esc(c.cidade)}</span>`:""}
+          </div>`).join("");
+        acDrop.style.display="block";
+        acDrop.querySelectorAll("[data-ac-cli]").forEach(el=>{
+          el.addEventListener("mousedown",e=>{
+            e.preventDefault();
+            acInput.value=el.getAttribute("data-ac-nome");
+            wrap.querySelector("#ped-clienteId").value=el.getAttribute("data-ac-cli");
+            const pag=el.getAttribute("data-ac-pag");
+            if(pag){const pf=wrap.querySelector("[name='formaPagamento']");if(pf&&!pf.value)pf.value=pag.toUpperCase();}
+            acDrop.style.display="none";
+          });
+        });
+      }
+      acInput.addEventListener("input",()=>showCliDrop(acInput.value));
+      acInput.addEventListener("focus",()=>showCliDrop(acInput.value));
+      document.addEventListener("click",e=>{if(!wrap.contains(e.target))acDrop.style.display="none";});
+    }
+
+    wrap.querySelector("#ped-cat-search")?.addEventListener("input",e=>renderCatalogo(e.target.value));
+    wrap.querySelector("#ped-add-manual")?.addEventListener("click",addItemManual);
+    $("#sv-close-form")?.addEventListener("click",()=>{wrap.innerHTML="";});
+    $("#sv-cancel-form")?.addEventListener("click",()=>{wrap.innerHTML="";});
+
+    async function salvarPedido(){
+      const form=$("#sv-crud-form");
+      const fd=new FormData(form);
+      const clienteNome=String(acInput?.value||"").trim().toUpperCase();
+      if(!clienteNome){toast("Informe o cliente.","warning");return null;}
+      const payload={
+        clienteNome,
+        clienteId:wrap.querySelector("#ped-clienteId")?.value||"",
+        data:fd.get("data")||"",
+        urgencia:fd.get("urgencia")||"Normal",
+        formaPagamento:String(fd.get("formaPagamento")||"").toUpperCase(),
+        status:fd.get("status")||"Aberto",
+        obs:String(fd.get("obs")||"").toUpperCase(),
+        total:calcTotal(),
+        itens:pedidoItens.map(it=>({
+          nome:it.nome, codigo:it.codigo, qtd:it.qtd,
+          valorUnit:it.valorUnit, desconto:it.desconto,
+          subtotal:it.qtd*it.valorUnit*(1-it.desconto/100),
+        })),
+      };
+      await runWithUi(async()=>{
+        if(isEdit) await DB.update("pedidos",itemId,payload);
+        else await DB.create("pedidos",payload);
+        await loadResource("pedidos");
+      },"Salvando pedido...");
+      return payload;
+    }
+
+    function gerarOrcamentoPDF(pedido,pedidoId){
+      const cliente=clientes.find(c=>String(getId(c))===String(pedido.clienteId||""))||{nome:pedido.clienteNome||""};
+      const nomeVendedor=DB.getUser()?.name||"Vendedor";
+      const dataEmissao=new Date().toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric"});
+      const numOrc=pedidoId?String(pedidoId).slice(-6).toUpperCase():`${Date.now()}`.slice(-6);
+      const itensHtml=(pedido.itens||[]).map((it,i)=>`
+        <tr>
+          <td style="text-align:center;">${i+1}</td>
+          <td>${esc(it.nome||"")}${it.codigo?` <small style="color:#888;">[${esc(it.codigo)}]</small>`:""}</td>
+          <td style="text-align:center;">${Number(it.qtd).toLocaleString("pt-BR",{maximumFractionDigits:2})}</td>
+          <td style="text-align:right;">${moneyBR(it.valorUnit)}</td>
+          <td style="text-align:center;">${it.desconto?it.desconto+"%":"-"}</td>
+          <td style="text-align:right;font-weight:600;">${moneyBR(it.subtotal||it.qtd*it.valorUnit*(1-(it.desconto||0)/100))}</td>
+        </tr>`).join("");
+
+      const telCliente=cliente.telefone?String(cliente.telefone).replace(/\D/g,""):"";
+      const emailCliente=cliente.email||"";
+      const msgWpp=encodeURIComponent(`Olá ${cliente.nome||""}! Segue o orçamento nº ${numOrc} no valor de ${moneyBR(pedido.total)}. Qualquer dúvida estou à disposição!`);
+      const wppLink=telCliente?`https://wa.me/55${telCliente}?text=${msgWpp}`:"";
+      const emailLink=emailCliente?`mailto:${emailCliente}?subject=Orçamento%20nº%20${numOrc}&body=${encodeURIComponent(`Olá ${cliente.nome||""}!\n\nSegue o orçamento nº ${numOrc} conforme solicitado.\nValor total: ${moneyBR(pedido.total)}\n\nAtenciosamente,\n${nomeVendedor}`)}`:"";
+
+      const win=window.open("","_blank","width=850,height=700");
+      if(!win){toast("Permita popups para gerar o orçamento.","warning");return;}
+
+      win.document.write(`<!DOCTYPE html><html lang="pt-BR"><head>
+      <meta charset="UTF-8"><title>Orçamento nº ${numOrc}</title>
+      <style>
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:'Segoe UI',Arial,sans-serif;color:#111;background:#fff;font-size:13px;}
+        .page{max-width:800px;margin:0 auto;padding:28px;}
+        .header{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:start;margin-bottom:24px;padding-bottom:16px;border-bottom:3px solid #1a2744;}
+        .logo{font-size:22px;font-weight:800;color:#1a2744;}
+        .orcnum{text-align:right;} .orcnum h2{font-size:20px;font-weight:800;color:#1a2744;} .orcnum p{font-size:12px;color:#666;margin-top:2px;}
+        .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;}
+        .info-box{background:#f5f7fa;border-radius:8px;padding:12px;}
+        .info-box h3{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;}
+        table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px;}
+        th{background:#1a2744;color:#fff;padding:9px 10px;text-align:left;font-size:11px;text-transform:uppercase;}
+        td{padding:8px 10px;border-bottom:1px solid #eee;} tr:nth-child(even){background:#f9f9f9;}
+        .total-box{display:flex;justify-content:flex-end;margin-bottom:20px;}
+        .total-inner{background:#1a2744;color:#fff;border-radius:10px;padding:14px 20px;min-width:200px;text-align:right;}
+        .total-inner .label{font-size:11px;opacity:.7;margin-bottom:4px;} .total-inner .valor{font-size:24px;font-weight:800;}
+        .footer{border-top:1px solid #eee;padding-top:16px;font-size:11px;color:#888;text-align:center;}
+        .btn-bar{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-bottom:20px;padding:16px;background:#f0f4fb;border-radius:10px;}
+        .btn-bar a,.btn-bar button{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;border:none;}
+        .btn-print{background:#1a2744;color:#fff;} .btn-wpp{background:#25d366;color:#fff;} .btn-mail{background:#4285f4;color:#fff;} .btn-close{background:#eee;color:#333;}
+        .obs-box{background:#fffbe6;border-left:3px solid #ffb300;padding:10px 14px;border-radius:0 8px 8px 0;margin-bottom:16px;font-size:12px;}
+        .btn-disabled{opacity:.4;cursor:not-allowed;}
+        @media print{.btn-bar{display:none!important}.page{padding:10px;}}
+      </style></head>
+      <body>
+      <div class="page">
+        <div class="btn-bar">
+          <button class="btn-print" onclick="window.print()">🖨️ Imprimir / Salvar PDF</button>
+          ${wppLink
+            ?`<a class="btn-wpp" href="${wppLink}" target="_blank">💬 Enviar WhatsApp</a>`
+            :`<button class="btn-wpp btn-disabled" disabled title="Cadastre o telefone do cliente">💬 WhatsApp</button>`}
+          ${emailLink
+            ?`<a class="btn-mail" href="${emailLink}">✉️ Enviar E-mail</a>`
+            :`<button class="btn-mail btn-disabled" disabled title="Cadastre o e-mail do cliente">✉️ E-mail</button>`}
+          <button class="btn-close" onclick="window.close()">✕ Fechar</button>
+        </div>
+        <div class="header">
+          <div>
+            <div class="logo">⚡ Supervenda</div>
+            <div style="font-size:12px;color:#666;margin-top:4px;">Vendedor: ${esc(nomeVendedor)}</div>
+          </div>
+          <div class="orcnum">
+            <h2>ORÇAMENTO</h2>
+            <p>Nº ${numOrc}</p>
+            <p>Emitido: ${dataEmissao}</p>
+            ${pedido.data?`<p>Data pedido: ${dateFormatBR(pedido.data)}</p>`:""}
+          </div>
+        </div>
+        <div class="info-grid">
+          <div class="info-box">
+            <h3>👤 Cliente</h3>
+            <p style="font-size:15px;font-weight:700;">${esc(cliente.nome||pedido.clienteNome||"")}</p>
+            ${cliente.cpfcnpj?`<p style="color:#666;font-size:12px;margin-top:3px;">CPF/CNPJ: ${esc(cliente.cpfcnpj)}</p>`:""}
+            ${cliente.endereco?`<p style="color:#666;font-size:12px;margin-top:3px;">${esc(cliente.endereco)}${cliente.bairro?", "+esc(cliente.bairro):""}${cliente.cidade?" — "+esc(cliente.cidade):""}</p>`:""}
+            ${telCliente?`<p style="color:#666;font-size:12px;margin-top:3px;">📞 ${esc(cliente.telefone)}</p>`:""}
+            ${emailCliente?`<p style="color:#666;font-size:12px;margin-top:3px;">✉️ ${esc(emailCliente)}</p>`:""}
+          </div>
+          <div class="info-box">
+            <h3>📋 Condições</h3>
+            ${pedido.formaPagamento?`<p style="margin-bottom:4px;">Pagamento: <strong>${esc(pedido.formaPagamento)}</strong></p>`:""}
+            ${pedido.urgencia&&pedido.urgencia!=="Normal"?`<p style="margin-bottom:4px;">Urgência: <strong style="color:${pedido.urgencia==="Alta"?"#c62828":pedido.urgencia==="Média"?"#e65100":"#1565c0"};">${esc(pedido.urgencia)}</strong></p>`:""}
+            <p>Status: <strong>${esc(pedido.status||"Aberto")}</strong></p>
+          </div>
+        </div>
+        <table>
+          <thead><tr>
+            <th style="width:32px;">#</th>
+            <th>Produto / Descrição</th>
+            <th style="width:55px;text-align:center;">Qtd</th>
+            <th style="width:90px;text-align:right;">Unit.</th>
+            <th style="width:55px;text-align:center;">Desc.</th>
+            <th style="width:100px;text-align:right;">Subtotal</th>
+          </tr></thead>
+          <tbody>${itensHtml||`<tr><td colspan="6" style="text-align:center;color:#888;padding:16px;">Nenhum item registrado.</td></tr>`}</tbody>
+        </table>
+        <div class="total-box">
+          <div class="total-inner">
+            <div class="label">VALOR TOTAL</div>
+            <div class="valor">${moneyBR(pedido.total)}</div>
+          </div>
+        </div>
+        ${pedido.obs?`<div class="obs-box"><strong>Observação:</strong> ${esc(pedido.obs)}</div>`:""}
+        <div class="footer">
+          <p>Este orçamento é válido por 30 dias a partir da data de emissão.</p>
+          <p style="margin-top:4px;">Gerado por Supervenda · ${esc(nomeVendedor)} · ${dataEmissao}</p>
+        </div>
+      </div></body></html>`);
+      win.document.close();
+    }
+
+    // Submit: só salvar
+    $("#sv-crud-form")?.addEventListener("submit",async e=>{
+      e.preventDefault();
+      const pedido=await salvarPedido(); if(!pedido) return;
+      wrap.innerHTML=""; renderCurrent();
+      toast("✅ Pedido salvo.","success");
+    });
+
+    // Salvar + gerar orçamento
+    $("#btn-salvar-orcamento")?.addEventListener("click",async()=>{
+      const pedido=await salvarPedido(); if(!pedido) return;
+      const pedidos=safeArray(state.cache.pedidos);
+      const novo=pedidos.sort((a,b)=>String(b.created_at||"").localeCompare(String(a.created_at||"")))[0];
+      wrap.innerHTML=""; renderCurrent();
+      toast("✅ Pedido salvo. Abrindo orçamento...","success");
+      setTimeout(()=>gerarOrcamentoPDF(pedido,novo?getId(novo):""),600);
+    });
+
+    // Gerar orçamento (edição)
+    $("#btn-gerar-orcamento")?.addEventListener("click",async()=>{
+      const pedido=await salvarPedido(); if(!pedido) return;
+      wrap.innerHTML=""; renderCurrent();
+      setTimeout(()=>gerarOrcamentoPDF(pedido,itemId),600);
+    });
+
+    // Excluir
+    if(isEdit){
+      $("#sv-delete-current")?.addEventListener("click",async()=>{
+        if(!confirm("Excluir este pedido?")) return;
+        await runWithUi(async()=>{await DB.remove("pedidos",itemId);await loadResource("pedidos");wrap.innerHTML="";renderCurrent();toast("✅ Excluído.","success");},"Excluindo...");
       });
     }
   }
