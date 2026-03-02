@@ -423,6 +423,7 @@
     if(route.id==="usuarios"){renderUsersScreen(root);return;}
     if(route.id==="financeiro"){renderFinanceiro(root);return;}
     if(route.id==="relatorios"){renderRelatorios(root);return;}
+    if(route.id==="rotas"){renderRotas(root);return;}
     // Detalhes de cliente
     if(state._clienteId){renderClienteDetalhes(root,state._clienteId);return;}
     if(route.resource&&SCHEMAS[route.resource]){renderCrudScreen(root,route.resource);return;}
@@ -1572,6 +1573,372 @@
     $("#rel-de")?.addEventListener("change",e=>{state._relFiltro.de=e.target.value;});
     $("#rel-ate")?.addEventListener("change",e=>{state._relFiltro.ate=e.target.value;});
     $("#rel-pdf")?.addEventListener("click",gerarPDF);
+  }
+
+  // ─── Rotas com Geolocalização ─────────────────────────────────────────────────
+  function renderRotas(root){
+    const clientes=safeArray(state.cache.clientes);
+    const rotasSalvas=safeArray(state.cache.rotas);
+
+    // Estado da rota atual sendo montada
+    if(!state._rotaState) state._rotaState={paradas:[],geocoded:{},otimizada:false,map:null};
+    const RS=state._rotaState;
+
+    // ── helpers ──
+    async function geocodeEndereco(cliente){
+      const key=getId(cliente)||cliente.nome;
+      if(RS.geocoded[key]) return RS.geocoded[key];
+      const partes=[cliente.endereco,cliente.numero,cliente.bairro,cliente.cidade,cliente.uf,"Brasil"].filter(Boolean).join(", ");
+      if(!partes.replace(/,\s*/g,"").trim()){return null;}
+      try{
+        const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(partes)}`,{headers:{"User-Agent":"supervenda-app"}});
+        const j=await r.json();
+        if(j&&j[0]){const coord={lat:parseFloat(j[0].lat),lng:parseFloat(j[0].lon),label:j[0].display_name};RS.geocoded[key]=coord;return coord;}
+      }catch(e){console.warn("Geocode falhou:",e);}
+      return null;
+    }
+
+    function distKm(a,b){
+      // Haversine simplificado
+      const R=6371,dLat=(b.lat-a.lat)*Math.PI/180,dLng=(b.lng-a.lng)*Math.PI/180;
+      const x=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
+      return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+    }
+
+    function otimizarRota(paradas){
+      // Nearest-neighbor TSP greedy a partir do primeiro ponto
+      const com=paradas.filter(p=>p.coord);
+      const sem=paradas.filter(p=>!p.coord);
+      if(com.length<=1) return [...com,...sem];
+      const visitados=new Set(),resultado=[com[0]];
+      visitados.add(0);
+      while(visitados.size<com.length){
+        const ultimo=resultado[resultado.length-1];
+        let melhorDist=Infinity,melhorIdx=-1;
+        com.forEach((p,i)=>{if(!visitados.has(i)){const d=distKm(ultimo.coord,p.coord);if(d<melhorDist){melhorDist=d;melhorIdx=i;}}});
+        if(melhorIdx<0) break;
+        visitados.add(melhorIdx);resultado.push(com[melhorIdx]);
+      }
+      return [...resultado,...sem];
+    }
+
+    function totalKm(paradas){
+      let total=0;
+      for(let i=1;i<paradas.length;i++){
+        if(paradas[i-1].coord&&paradas[i].coord) total+=distKm(paradas[i-1].coord,paradas[i].coord);
+      }
+      return total;
+    }
+
+    // ── Render mapa com Leaflet ──
+    function initMap(){
+      if(typeof window.L==="undefined") return;
+      const mapDiv=document.getElementById("sv-rota-mapa");
+      if(!mapDiv) return;
+      if(RS.map){try{RS.map.remove();}catch{} RS.map=null;}
+      RS.map=window.L.map("sv-rota-mapa").setView([-15.7801,-47.9292],5);
+      window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(RS.map);
+      const coords=RS.paradas.filter(p=>p.coord);
+      if(!coords.length) return;
+      const bounds=[];
+      coords.forEach((p,i)=>{
+        const cor=i===0?"#00e676":i===coords.length-1?"#ff5252":"#4488ff";
+        const marker=window.L.circleMarker([p.coord.lat,p.coord.lng],{radius:10,fillColor:cor,color:"#fff",weight:2,fillOpacity:0.9}).addTo(RS.map);
+        marker.bindPopup(`<b>${i+1}. ${p.nome}</b><br><small>${p.endereco||""}</small>`);
+        bounds.push([p.coord.lat,p.coord.lng]);
+      });
+      if(coords.length>1){
+        const latlngs=coords.map(p=>[p.coord.lat,p.coord.lng]);
+        window.L.polyline(latlngs,{color:"#4488ff",weight:3,dashArray:"6,6",opacity:.7}).addTo(RS.map);
+      }
+      if(bounds.length) RS.map.fitBounds(bounds,{padding:[20,20]});
+    }
+
+    // ── Render lista de paradas ──
+    function renderParadas(){
+      const wrap=document.getElementById("sv-paradas-lista"); if(!wrap) return;
+      if(!RS.paradas.length){
+        wrap.innerHTML=`<div style="padding:16px;text-align:center;color:var(--muted);font-size:13px;">Nenhuma parada adicionada. Busque e adicione clientes abaixo.</div>`;
+        updateKm(); return;
+      }
+      wrap.innerHTML=RS.paradas.map((p,i)=>`
+        <div class="sv-parada-item" draggable="true" data-parada-idx="${i}"
+          style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--bg2);border:1px solid ${p.coord?"var(--border)":"rgba(255,179,0,.3)"};border-radius:10px;margin-bottom:6px;cursor:grab;">
+          <div style="font-size:18px;color:var(--muted2);font-weight:700;min-width:28px;text-align:center;">${i+1}</div>
+          <div style="flex:1;overflow:hidden;">
+            <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.nome)}</div>
+            <div style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              ${p.coord?`📍 ${esc(p.endereco||"")}`:`⚠️ Sem coordenadas — ${esc(p.endereco||"Endereço não cadastrado")}`}
+            </div>
+            ${p.coord&&i>0&&RS.paradas[i-1].coord?`<div style="font-size:10px;color:var(--blue);">↑ ${distKm(RS.paradas[i-1].coord,p.coord).toFixed(1)} km do anterior</div>`:""}
+          </div>
+          <div style="display:flex;gap:4px;flex-shrink:0;">
+            ${i>0?`<button type="button" data-mover="up" data-idx="${i}" style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:4px 8px;cursor:pointer;font-size:13px;">↑</button>`:""}
+            ${i<RS.paradas.length-1?`<button type="button" data-mover="down" data-idx="${i}" style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:4px 8px;cursor:pointer;font-size:13px;">↓</button>`:""}
+            <button type="button" data-remover="${i}" style="background:transparent;border:none;color:var(--red);font-size:16px;cursor:pointer;padding:2px 6px;">✕</button>
+          </div>
+        </div>`).join("");
+
+      // Botões mover/remover
+      wrap.querySelectorAll("[data-mover]").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          const i=Number(btn.getAttribute("data-idx")),dir=btn.getAttribute("data-mover");
+          const j=dir==="up"?i-1:i+1;
+          [RS.paradas[i],RS.paradas[j]]=[RS.paradas[j],RS.paradas[i]];
+          RS.otimizada=false;renderParadas();initMap();
+        });
+      });
+      wrap.querySelectorAll("[data-remover]").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          RS.paradas.splice(Number(btn.getAttribute("data-remover")),1);
+          RS.otimizada=false;renderParadas();initMap();
+        });
+      });
+
+      // Drag & drop
+      let dragIdx=null;
+      wrap.querySelectorAll(".sv-parada-item").forEach(el=>{
+        el.addEventListener("dragstart",()=>{dragIdx=Number(el.getAttribute("data-parada-idx"));el.style.opacity=".4";});
+        el.addEventListener("dragend",()=>{el.style.opacity="1";});
+        el.addEventListener("dragover",e=>{e.preventDefault();el.style.background="var(--bg3)";});
+        el.addEventListener("dragleave",()=>{el.style.background="var(--bg2)";});
+        el.addEventListener("drop",e=>{
+          e.preventDefault();el.style.background="var(--bg2)";
+          const toIdx=Number(el.getAttribute("data-parada-idx"));
+          if(dragIdx!==null&&dragIdx!==toIdx){
+            const [moved]=RS.paradas.splice(dragIdx,1);RS.paradas.splice(toIdx,0,moved);
+            RS.otimizada=false;renderParadas();initMap();
+          }
+        });
+      });
+      updateKm();
+    }
+
+    function updateKm(){
+      const km=totalKm(RS.paradas);
+      const el=document.getElementById("sv-km-total");
+      if(el) el.textContent=km>0?`${km.toFixed(1)} km total`:"";
+    }
+
+    // ── Geocode autocomplete de clientes ──
+    function setupBusca(){
+      const input=document.getElementById("sv-rota-busca");
+      const drop=document.getElementById("sv-rota-drop");
+      if(!input||!drop) return;
+
+      input.addEventListener("input",()=>{
+        const q=input.value.trim().toLowerCase();
+        const matches=clientes.filter(c=>!q||String(c.nome||"").toLowerCase().includes(q)||String(c.cidade||"").toLowerCase().includes(q)).slice(0,10);
+        if(!matches.length||!q){drop.style.display="none";return;}
+        drop.innerHTML=matches.map(c=>`
+          <div data-cli-id="${esc(getId(c))}" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px;"
+            onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
+            <div style="font-weight:600;">${esc(String(c.nome||"").toUpperCase())}</div>
+            <div style="font-size:11px;color:var(--muted);">${[c.endereco,c.numero,c.bairro,c.cidade,c.uf].filter(Boolean).join(", ")||"Endereço não cadastrado"}</div>
+          </div>`).join("");
+        drop.style.display="block";
+        drop.querySelectorAll("[data-cli-id]").forEach(el=>{
+          el.addEventListener("mousedown",async e=>{
+            e.preventDefault();
+            const id=el.getAttribute("data-cli-id");
+            const cli=clientes.find(c=>String(getId(c))===id);
+            if(!cli) return;
+            // Evitar duplicata
+            if(RS.paradas.find(p=>p.clienteId===id)){toast("Cliente já adicionado à rota.","warning");input.value="";drop.style.display="none";return;}
+            const endereco=[cli.endereco,cli.numero,cli.bairro,cli.cidade,cli.uf].filter(Boolean).join(", ");
+            const parada={clienteId:id,nome:String(cli.nome||"").toUpperCase(),endereco,telefone:cli.telefone||"",coord:null};
+            RS.paradas.push(parada);
+            input.value="";drop.style.display="none";
+            renderParadas();
+            // Geocode em background
+            toast(`🔍 Buscando localização de ${parada.nome}...`,"info",2500);
+            const coord=await geocodeEndereco(cli);
+            if(coord){parada.coord=coord;toast(`📍 ${parada.nome} localizado!`,"success",2000);}
+            else toast(`⚠️ Não foi possível localizar ${parada.nome}. Verifique o endereço.`,"warning",4000);
+            renderParadas();initMap();
+          });
+        });
+      });
+      input.addEventListener("focus",()=>{if(input.value.trim()) input.dispatchEvent(new Event("input"));});
+      document.addEventListener("click",e=>{if(!input.closest("[id]").contains(e.target)) drop.style.display="none";});
+    }
+
+    // ── Carregar rota salva ──
+    function carregarRotaSalva(rota){
+      try{
+        const dados=JSON.parse(rota.obs||"{}");
+        if(Array.isArray(dados.paradas)){
+          RS.paradas=dados.paradas;
+          // Restaurar geocoded cache
+          dados.geocoded&&Object.assign(RS.geocoded,dados.geocoded);
+          RS.otimizada=dados.otimizada||false;
+          renderParadas();
+          setTimeout(initMap,300);
+          toast("Rota carregada.","success");
+        }
+      }catch{toast("Não foi possível carregar esta rota.","error");}
+    }
+
+    // ── Render principal ──
+    root.innerHTML=`
+      <!-- CSS Leaflet -->
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+
+      <div class="card">
+        <div class="card-title" style="margin-bottom:10px;">🗺️ Planejador de Rotas</div>
+        <div style="font-size:12px;color:var(--muted);">Adicione clientes, otimize o trajeto e salve a rota. Drag & drop ou ↑↓ para reordenar.</div>
+      </div>
+
+      <!-- Busca de clientes -->
+      <div class="card">
+        <div style="font-size:13px;font-weight:600;margin-bottom:10px;">➕ Adicionar parada</div>
+        <div style="position:relative;">
+          <input type="text" id="sv-rota-busca" placeholder="Buscar cliente pelo nome ou cidade..." autocomplete="off"
+            style="width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;"/>
+          <div id="sv-rota-drop" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg2);border:1px solid var(--border-hi);border-radius:9px;z-index:999;max-height:220px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.3);margin-top:2px;"></div>
+        </div>
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+          <button id="btn-geo-atual" class="btn btn-secondary" style="font-size:12px;">📍 Adicionar minha posição atual</button>
+          <button id="btn-otimizar" class="btn btn-primary" style="font-size:12px;">⚡ Otimizar trajeto</button>
+          <button id="btn-limpar-rota" class="btn btn-ghost" style="font-size:12px;">🗑️ Limpar</button>
+        </div>
+      </div>
+
+      <!-- Lista de paradas -->
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+          <div style="font-size:13px;font-weight:600;">📋 Paradas <span id="sv-km-total" style="font-size:12px;color:var(--blue);margin-left:8px;"></span></div>
+          <div style="display:flex;gap:6px;">
+            <button id="btn-abrir-google" class="btn btn-secondary" style="font-size:12px;">🗺️ Abrir no Google Maps</button>
+            <button id="btn-salvar-rota" class="btn btn-primary" style="font-size:12px;">💾 Salvar rota</button>
+          </div>
+        </div>
+        <div id="sv-paradas-lista"></div>
+      </div>
+
+      <!-- Mapa -->
+      <div class="card" style="padding:0;overflow:hidden;border-radius:14px;">
+        <div id="sv-rota-mapa" style="height:340px;width:100%;border-radius:14px;"></div>
+      </div>
+
+      <!-- Rotas salvas -->
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
+          <div style="font-size:13px;font-weight:600;">📁 Rotas salvas (${rotasSalvas.length})</div>
+          <button id="btn-refresh-rotas" class="btn btn-secondary btn-icon" style="font-size:13px;">↻</button>
+        </div>
+        ${rotasSalvas.length?rotasSalvas.map(r=>{
+          let info="";
+          try{const d=JSON.parse(r.obs||"{}");if(d.paradas)info=` · ${d.paradas.length} paradas`;}catch{}
+          return`<div style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;margin-bottom:6px;">
+            <div style="flex:1;overflow:hidden;">
+              <div style="font-size:13px;font-weight:600;">${esc(r.nome||r.titulo||dateFormatBR(r.data)||"Rota")}</div>
+              <div style="font-size:11px;color:var(--muted);">${dateFormatBR(r.data)}${info}</div>
+            </div>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 10px;" data-carregar-rota="${esc(getId(r))}">📂 Carregar</button>
+            <button class="btn btn-danger" style="font-size:12px;padding:6px 10px;" data-excluir-rota="${esc(getId(r))}">🗑️</button>
+          </div>`;
+        }).join(""):`<div style="padding:12px;text-align:center;color:var(--muted);font-size:13px;">Nenhuma rota salva ainda.</div>`}
+      </div>
+    `;
+
+    // Carregar Leaflet dinamicamente
+    if(typeof window.L==="undefined"){
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+      s.onload=()=>{renderParadas();setTimeout(initMap,200);};
+      document.head.appendChild(s);
+    } else {
+      renderParadas();setTimeout(initMap,200);
+    }
+
+    setupBusca();
+
+    // Posição atual
+    document.getElementById("btn-geo-atual")?.addEventListener("click",()=>{
+      if(!navigator.geolocation){toast("Geolocalização não suportada neste dispositivo.","warning");return;}
+      toast("📍 Buscando sua localização...","info",2500);
+      navigator.geolocation.getCurrentPosition(pos=>{
+        const coord={lat:pos.coords.latitude,lng:pos.coords.longitude,label:"Minha posição"};
+        const existe=RS.paradas.find(p=>p.clienteId==="__minha_pos__");
+        if(existe){existe.coord=coord;toast("📍 Posição atualizada.","success");}
+        else{RS.paradas.unshift({clienteId:"__minha_pos__",nome:"📍 MINHA POSIÇÃO ATUAL",endereco:"",telefone:"",coord});}
+        renderParadas();initMap();
+      },err=>{toast(`Erro ao obter localização: ${err.message}`,"error");});
+    });
+
+    // Otimizar
+    document.getElementById("btn-otimizar")?.addEventListener("click",()=>{
+      if(RS.paradas.length<2){toast("Adicione pelo menos 2 paradas para otimizar.","warning");return;}
+      const comCoord=RS.paradas.filter(p=>p.coord).length;
+      if(comCoord<2){toast("Aguarde a geocodificação de pelo menos 2 paradas.","warning");return;}
+      const antes=totalKm(RS.paradas);
+      RS.paradas=otimizarRota(RS.paradas);
+      RS.otimizada=true;
+      const depois=totalKm(RS.paradas);
+      renderParadas();initMap();
+      toast(`⚡ Rota otimizada! ${antes.toFixed(1)} → ${depois.toFixed(1)} km (-${(antes-depois).toFixed(1)} km)`,"success",5000);
+    });
+
+    // Limpar
+    document.getElementById("btn-limpar-rota")?.addEventListener("click",()=>{
+      if(!confirm("Limpar todas as paradas?")) return;
+      RS.paradas=[];RS.otimizada=false;renderParadas();
+      if(RS.map){try{RS.map.remove();}catch{}RS.map=null;}
+      setTimeout(initMap,100);
+    });
+
+    // Abrir no Google Maps
+    document.getElementById("btn-abrir-google")?.addEventListener("click",()=>{
+      const comCoord=RS.paradas.filter(p=>p.coord);
+      if(!comCoord.length){toast("Nenhuma parada com localização encontrada.","warning");return;}
+      const waypoints=comCoord.map((p,i)=>`${p.coord.lat},${p.coord.lng}`);
+      const origem=waypoints[0],destino=waypoints[waypoints.length-1];
+      const via=waypoints.slice(1,-1).join("|");
+      const url=`https://www.google.com/maps/dir/?api=1&origin=${origem}&destination=${destino}${via?`&waypoints=${via}`:""}&travelmode=driving`;
+      window.open(url,"_blank");
+    });
+
+    // Salvar rota
+    document.getElementById("btn-salvar-rota")?.addEventListener("click",async()=>{
+      if(!RS.paradas.length){toast("Adicione paradas antes de salvar.","warning");return;}
+      const nome=prompt("Nome da rota (ex: Rota Centro - 01/03):",`Rota ${new Date().toLocaleDateString("pt-BR")}`);
+      if(!nome) return;
+      const payload={
+        nome:nome.toUpperCase(),
+        data:new Date().toISOString().slice(0,10),
+        obs:JSON.stringify({paradas:RS.paradas,geocoded:RS.geocoded,otimizada:RS.otimizada}),
+      };
+      await runWithUi(async()=>{
+        await DB.create("rotas",payload);
+        await loadResource("rotas");
+        renderRotas(root);
+        toast("✅ Rota salva!","success");
+      },"Salvando rota...");
+    });
+
+    // Refresh rotas salvas
+    document.getElementById("btn-refresh-rotas")?.addEventListener("click",async()=>{
+      await runWithUi(async()=>{await loadResource("rotas");renderRotas(root);},"Atualizando...");
+    });
+
+    // Carregar rota salva
+    root.querySelectorAll("[data-carregar-rota]").forEach(btn=>{
+      btn.addEventListener("click",()=>{
+        const id=btn.getAttribute("data-carregar-rota");
+        const rota=rotasSalvas.find(r=>String(getId(r))===String(id));
+        if(rota) carregarRotaSalva(rota);
+      });
+    });
+
+    // Excluir rota salva
+    root.querySelectorAll("[data-excluir-rota]").forEach(btn=>{
+      btn.addEventListener("click",async()=>{
+        const id=btn.getAttribute("data-excluir-rota");
+        if(!confirm("Excluir esta rota salva?")) return;
+        await runWithUi(async()=>{await DB.remove("rotas",id);await loadResource("rotas");renderRotas(root);toast("Excluído.","success");},"Excluindo...");
+      });
+    });
   }
 
   // Users
