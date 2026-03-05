@@ -1,6 +1,7 @@
 export interface Env {
   DB: D1Database;
   BACKUPS?: R2Bucket;
+  DOCS?: R2Bucket;
   JWT_SECRET: string;
 }
 
@@ -973,6 +974,223 @@ export default {
         if (req.method === "DELETE" && p[2]) {
           await env.DB.prepare("DELETE FROM notas WHERE id=? AND vendor_id=?")
             .bind(p[2], vendorId).run();
+          return json({ ok: true });
+        }
+      }
+
+      /** =================== MANUAIS =================== **/
+      if (p[1] === "manuais") {
+
+        // GET lista de manuais
+        if (req.method === "GET" && !p[2]) {
+          const rows = await env.DB.prepare(
+            "SELECT * FROM manuais WHERE vendor_id=? ORDER BY created_at DESC"
+          ).bind(vendorId).all<any>();
+          return json(rows.results || []);
+        }
+
+        // GET download/stream de um manual (retorna URL assinada ou stream)
+        if (req.method === "GET" && p[2] === "download" && p[3]) {
+          const manual = await env.DB.prepare(
+            "SELECT * FROM manuais WHERE id=? AND vendor_id=?"
+          ).bind(p[3], vendorId).first<any>();
+          if (!manual) return bad("Manual não encontrado.", 404);
+
+          if (!env.BACKUPS) return bad("Armazenamento R2 não configurado.", 503);
+
+          const obj = await env.BACKUPS.get(manual.r2key);
+          if (!obj) return bad("Arquivo não encontrado no storage.", 404);
+
+          const headers = new Headers();
+          headers.set("Content-Type", "application/pdf");
+          headers.set("Content-Disposition", `inline; filename="${encodeURIComponent(manual.nome_arquivo)}"`);
+          headers.set("Access-Control-Allow-Origin", "*");
+          headers.set("Cache-Control", "private, max-age=3600");
+
+          return new Response(obj.body, { status: 200, headers });
+        }
+
+        // POST upload de novo manual (multipart/form-data)
+        if (req.method === "POST" && !p[2]) {
+          if (!env.BACKUPS) return bad("R2 não configurado. Adicione o binding BACKUPS.", 503);
+
+          const ct = req.headers.get("content-type") || "";
+          if (!ct.includes("multipart/form-data")) return bad("Envie como multipart/form-data.", 400);
+
+          let formData: FormData;
+          try { formData = await req.formData(); }
+          catch (e: any) { return bad("Erro ao ler formulário: " + (e?.message || ""), 400); }
+
+          const file = formData.get("arquivo") as File | null;
+          const nome = String(formData.get("nome") || "").trim();
+          const descricao = String(formData.get("descricao") || "").trim();
+          const tags = String(formData.get("tags") || "").trim();
+          const categoria = String(formData.get("categoria") || "").trim();
+
+          if (!file) return bad("Arquivo PDF obrigatório.", 400);
+          if (file.type && !file.type.includes("pdf") && !file.name?.toLowerCase().endsWith(".pdf")) {
+            return bad("Apenas arquivos PDF são aceitos.", 400);
+          }
+          const maxSize = 20 * 1024 * 1024; // 20MB
+          if (file.size > maxSize) return bad("Arquivo muito grande (máx. 20MB).", 400);
+
+          const id = "MN-" + String(Date.now()).slice(-8) + Math.random().toString(36).slice(2,5).toUpperCase();
+          const nomeArquivo = file.name || nome || `manual-${id}.pdf`;
+          const r2key = `manuais/${vendorId}/${id}/${nomeArquivo}`;
+
+          const arrayBuffer = await file.arrayBuffer();
+          await env.BACKUPS.put(r2key, arrayBuffer, {
+            httpMetadata: { contentType: "application/pdf" },
+            customMetadata: { vendorId, nome, tags, categoria },
+          });
+
+          await env.DB.prepare(
+            `INSERT INTO manuais (id,vendor_id,nome,nome_arquivo,descricao,tags,categoria,r2key,tamanho,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?)`
+          ).bind(id, vendorId,
+            nome || nomeArquivo,
+            nomeArquivo, descricao, tags, categoria,
+            r2key, file.size, nowISO()
+          ).run();
+
+          await logAtividade("criar", "manuais", `Manual "${nome||nomeArquivo}" (${(file.size/1024).toFixed(0)}KB)`);
+
+          const row = await env.DB.prepare("SELECT * FROM manuais WHERE id=?").bind(id).first<any>();
+          return json(row || { id, nome, nome_arquivo: nomeArquivo, r2key });
+        }
+
+        // PUT atualizar metadados do manual
+        if (req.method === "PUT" && p[2]) {
+          const body = await readJson<any>(req);
+          await env.DB.prepare(
+            `UPDATE manuais SET nome=?,descricao=?,tags=?,categoria=? WHERE id=? AND vendor_id=?`
+          ).bind(
+            body.nome || "", body.descricao || "", body.tags || "", body.categoria || "",
+            p[2], vendorId
+          ).run();
+          const row = await env.DB.prepare("SELECT * FROM manuais WHERE id=? AND vendor_id=?").bind(p[2], vendorId).first<any>();
+          return json(row || {});
+        }
+
+        // DELETE excluir manual
+        if (req.method === "DELETE" && p[2]) {
+          const manual = await env.DB.prepare(
+            "SELECT * FROM manuais WHERE id=? AND vendor_id=?"
+          ).bind(p[2], vendorId).first<any>();
+          if (!manual) return bad("Não encontrado.", 404);
+
+          if (env.BACKUPS && manual.r2key) {
+            try { await env.BACKUPS.delete(manual.r2key); } catch {}
+          }
+          await env.DB.prepare("DELETE FROM manuais WHERE id=? AND vendor_id=?").bind(p[2], vendorId).run();
+          await logAtividade("excluir", "manuais", `Manual "${manual.nome}" excluído`);
+          return json({ ok: true });
+        }
+      }
+
+      /** =================== DOCS / BIBLIOTECA =================== **/
+      if (p[1] === "docs") {
+
+        // GET /api/docs — listar documentos (com busca opcional ?q=)
+        if (req.method === "GET" && !p[2]) {
+          const url = new URL(req.url);
+          const q = (url.searchParams.get("q") || "").trim().toLowerCase();
+          const rows = q
+            ? await env.DB.prepare(
+                `SELECT * FROM docs WHERE vendor_id=?
+                 AND (LOWER(nome) LIKE ? OR LOWER(descricao) LIKE ? OR LOWER(palavras_chave) LIKE ?)
+                 ORDER BY created_at DESC`
+              ).bind(vendorId, `%${q}%`, `%${q}%`, `%${q}%`).all<any>()
+            : await env.DB.prepare(
+                "SELECT * FROM docs WHERE vendor_id=? ORDER BY created_at DESC"
+              ).bind(vendorId).all<any>();
+          return json(rows.results || []);
+        }
+
+        // GET /api/docs/:id/download — gerar URL assinada ou stream do PDF
+        if (req.method === "GET" && p[2] && p[3] === "download") {
+          const doc = await env.DB.prepare("SELECT * FROM docs WHERE id=? AND vendor_id=?")
+            .bind(p[2], vendorId).first<any>();
+          if (!doc) return bad("Documento não encontrado.", 404);
+
+          if (!env.DOCS) return bad("Bucket de documentos não configurado.", 503);
+          const obj = await env.DOCS.get(doc.r2_key);
+          if (!obj) return bad("Arquivo não encontrado no storage.", 404);
+
+          const headers = new Headers();
+          headers.set("Content-Type", "application/pdf");
+          headers.set("Content-Disposition", `inline; filename="${encodeURIComponent(doc.nome_arquivo)}"`);
+          headers.set("Access-Control-Allow-Origin", "*");
+          headers.set("Cache-Control", "private, max-age=3600");
+          return new Response(obj.body, { status: 200, headers });
+        }
+
+        // POST /api/docs — upload de PDF (multipart/form-data)
+        if (req.method === "POST") {
+          if (!env.DOCS) return bad("Bucket de documentos não configurado. Crie o bucket 'supervenda-docs' no R2.", 503);
+
+          const ct = req.headers.get("content-type") || "";
+          if (!ct.includes("multipart/form-data")) return bad("Envie o arquivo como multipart/form-data.", 400);
+
+          let formData: FormData;
+          try { formData = await req.formData(); }
+          catch { return bad("Falha ao ler o formulário.", 400); }
+
+          const file = formData.get("arquivo") as File | null;
+          if (!file) return bad("Campo 'arquivo' obrigatório.", 400);
+          if (file.size > 30 * 1024 * 1024) return bad("Arquivo muito grande. Máximo: 30 MB.", 400);
+
+          const nome       = String(formData.get("nome") || file.name).trim();
+          const descricao  = String(formData.get("descricao") || "").trim();
+          const palavras   = String(formData.get("palavras_chave") || "").trim().toLowerCase();
+          const categoria  = String(formData.get("categoria") || "Geral").trim();
+
+          const id = "DC-" + String(Date.now()).slice(-8) + Math.random().toString(36).slice(2, 5);
+          const ext = file.name.split(".").pop()?.toLowerCase() || "pdf";
+          const r2Key = `docs/${vendorId}/${id}.${ext}`;
+
+          const bytes = await file.arrayBuffer();
+          await env.DOCS.put(r2Key, bytes, {
+            httpMetadata: { contentType: file.type || "application/pdf" },
+            customMetadata: { vendorId, docId: id, nome },
+          });
+
+          await env.DB.prepare(
+            `INSERT INTO docs (id,vendor_id,nome,nome_arquivo,descricao,palavras_chave,categoria,r2_key,tamanho,created_at,updated_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(id, vendorId, nome, file.name, descricao, palavras, categoria,
+                 r2Key, file.size, nowISO(), nowISO()).run();
+
+          await logAtividade("criar", "docs", `Upload: ${nome} (${(file.size/1024).toFixed(0)} KB)`);
+          const row = await env.DB.prepare("SELECT * FROM docs WHERE id=?").bind(id).first<any>();
+          return json(row, 201);
+        }
+
+        // PUT /api/docs/:id — atualizar metadados
+        if (req.method === "PUT" && p[2]) {
+          const body = await readJson<any>(req);
+          await env.DB.prepare(
+            `UPDATE docs SET nome=?,descricao=?,palavras_chave=?,categoria=?,updated_at=? WHERE id=? AND vendor_id=?`
+          ).bind(
+            String(body.nome||"").trim(), String(body.descricao||"").trim(),
+            String(body.palavras_chave||"").trim().toLowerCase(),
+            String(body.categoria||"Geral").trim(),
+            nowISO(), p[2], vendorId
+          ).run();
+          const row = await env.DB.prepare("SELECT * FROM docs WHERE id=? AND vendor_id=?").bind(p[2], vendorId).first<any>();
+          return json(row || {});
+        }
+
+        // DELETE /api/docs/:id
+        if (req.method === "DELETE" && p[2]) {
+          const doc = await env.DB.prepare("SELECT * FROM docs WHERE id=? AND vendor_id=?")
+            .bind(p[2], vendorId).first<any>();
+          if (!doc) return bad("Não encontrado.", 404);
+          if (env.DOCS && doc.r2_key) {
+            try { await env.DOCS.delete(doc.r2_key); } catch {}
+          }
+          await env.DB.prepare("DELETE FROM docs WHERE id=? AND vendor_id=?").bind(p[2], vendorId).run();
+          await logAtividade("excluir", "docs", `Doc excluído: ${doc.nome}`);
           return json({ ok: true });
         }
       }
