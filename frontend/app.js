@@ -62,6 +62,7 @@
     {id:"pedidos",     label:"Pedidos",     icon:"🛒", resource:"pedidos"},
     {id:"financeiro",  label:"Financeiro",  icon:"💰"},
     {id:"relatorios",  label:"Relatórios",  icon:"📈"},
+    {id:"biblioteca",  label:"Biblioteca",  icon:"📚"},
     {id:"rotas",       label:"Rotas",       icon:"🗺️", resource:"rotas"},
     {id:"despesas",    label:"Despesas",    icon:"💸", resource:"despesas"},
     {id:"lembretes",   label:"Lembretes",   icon:"🔔", resource:"lembretes"},
@@ -429,6 +430,7 @@
       if(!temPermissaoLocal("relatorios")){root.innerHTML=`<div class="card"><p style="color:var(--red);">🚫 Sem permissão para acessar Relatórios.</p></div>`;return;}
       renderRelatorios(root);return;
     }
+    if(route.id==="manuais"){renderManuais(root);return;}
     if(route.id==="rotas"){
       if(!temPermissaoLocal("rotas")){root.innerHTML=`<div class="card"><p style="color:var(--red);">🚫 Sem permissão para acessar Rotas.</p></div>`;return;}
       renderRotas(root);return;
@@ -574,11 +576,11 @@
     const cacheKey=resource;
     const rawItems=safeArray(state.cache[cacheKey]);
 
-    function getFiltered(){
+    const getFiltered=()=>{
       const q=String(state.ui.search||"").trim().toLowerCase();
       const items=rawItems.map(it=>normalizeItem(resource,it));
       return !q?items:items.filter(it=>Object.values(it||{}).some(v=>String(v??"").toLowerCase().includes(q)));
-    }
+    };
 
     root.innerHTML=`
       <div class="card">
@@ -645,7 +647,7 @@
         e.target.value="";
         const ext=file.name.split(".").pop().toLowerCase();
 
-        async function processRows(rows){
+        const processRows=async(rows)=>{
           if(!rows.length){toast("Arquivo vazio ou sem dados reconhecíveis.","warning");return;}
           const ok=[];const erros=[];
           for(const row of rows){
@@ -667,7 +669,6 @@
               sku:String(row.codigo||row.sku||""),
             };
             try{
-              // Tentar encontrar produto existente pelo nome para atualizar
               const existente=rawItems.find(m=>String(m.nome||m.produto||"").toUpperCase()===nome);
               if(existente) await DB.update("mercadorias",getId(existente),payload);
               else await DB.create("mercadorias",payload);
@@ -678,7 +679,7 @@
           renderCrudScreen(root,"mercadorias");
           toast(`✅ ${ok.length} produto${ok.length!==1?"s":""} importado${ok.length!==1?"s":""}${erros.length?` · ⚠️ ${erros.length} erro(s)`:""}`, ok.length?"success":"warning", 6000);
           if(erros.length) console.warn("Erros na importação:",erros);
-        }
+        };
 
         if(ext==="csv"){
           const text=await file.text();
@@ -848,7 +849,7 @@
       if(!input||!drop) return;
       const source=safeArray(state.cache[f.source]||[]);
 
-      function showDrop(q){
+      const showDrop=(q)=>{
         const qq=q.trim().toLowerCase();
         const matches=source.filter(it=>{
           const nome=String(it.nome||it.name||"").toLowerCase();
@@ -1199,7 +1200,7 @@
     const acInput=wrap.querySelector("#ac-clienteNome");
     const acDrop=wrap.querySelector("#ac-drop-clienteNome");
     if(acInput&&acDrop){
-      function showCliDrop(q){
+      const showCliDrop=(q)=>{
         const qq=q.trim().toLowerCase();
         const matches=clientes.filter(c=>!qq||String(c.nome||"").toLowerCase().includes(qq)).slice(0,10);
         if(!matches.length){acDrop.style.display="none";return;}
@@ -1742,6 +1743,336 @@
     $("#rel-de")?.addEventListener("change",e=>{state._relFiltro.de=e.target.value;});
     $("#rel-ate")?.addEventListener("change",e=>{state._relFiltro.ate=e.target.value;});
     $("#rel-pdf")?.addEventListener("click",gerarPDF);
+  }
+
+  // ─── Manuais ──────────────────────────────────────────────────────────────────
+  async function renderManuais(root){
+    const apiBase=DB.request.__proto__&&DB.apiBase?DB.apiBase():
+      (window.CONFIG?.API_BASE||localStorage.getItem("supervenda_api_base")||"").replace(/\/+$/,"");
+
+    // Carregar lista
+    let manuais=[];
+    try{ manuais=safeArray(await DB.request("/api/manuais",{method:"GET"})); }
+    catch(e){ manuais=[]; }
+
+    // Estado local de busca/filtro
+    if(!state._manFiltro) state._manFiltro={q:"",cat:""};
+    const F=state._manFiltro;
+
+    // Categorias disponíveis
+    const cats=[...new Set(manuais.map(m=>String(m.categoria||"").trim()).filter(Boolean))].sort();
+
+    function filtraManuais(){
+      const q=F.q.trim().toLowerCase();
+      return manuais.filter(m=>{
+        const matchQ=!q||
+          String(m.nome||"").toLowerCase().includes(q)||
+          String(m.descricao||"").toLowerCase().includes(q)||
+          String(m.tags||"").toLowerCase().includes(q)||
+          String(m.nome_arquivo||"").toLowerCase().includes(q)||
+          String(m.categoria||"").toLowerCase().includes(q);
+        const matchCat=!F.cat||String(m.categoria||"")===F.cat;
+        return matchQ&&matchCat;
+      });
+    }
+
+    function tamanhoFmt(bytes){
+      if(!bytes) return "";
+      const kb=bytes/1024;
+      return kb<1024?`${kb.toFixed(0)} KB`:`${(kb/1024).toFixed(1)} MB`;
+    }
+
+    function renderLista(){
+      const lista=document.getElementById("sv-man-lista"); if(!lista) return;
+      const filtrados=filtraManuais();
+      if(!filtrados.length){
+        lista.innerHTML=`<div style="padding:32px;text-align:center;color:var(--muted);">
+          <div style="font-size:40px;margin-bottom:8px;">📚</div>
+          <div>${F.q||F.cat?"Nenhum manual encontrado para a busca.":"Nenhum manual cadastrado ainda."}</div>
+        </div>`;
+        return;
+      }
+      lista.innerHTML=filtrados.map(m=>{
+        const tagList=String(m.tags||"").split(",").map(t=>t.trim()).filter(Boolean);
+        return`<div class="list-item" style="gap:0;">
+          <div style="display:flex;align-items:flex-start;gap:12px;padding:12px 14px;">
+            <div style="font-size:36px;flex-shrink:0;line-height:1;">📄</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.nome||m.nome_arquivo||"")}</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.nome_arquivo||"")}</div>
+              ${m.descricao?`<div style="font-size:12px;color:var(--text);margin-top:4px;line-height:1.4;">${esc(m.descricao)}</div>`:""}
+              <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;align-items:center;">
+                ${m.categoria?`<span style="background:rgba(68,136,255,.12);color:var(--blue);border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600;">${esc(m.categoria)}</span>`:""}
+                ${tagList.map(t=>`<span style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--muted);">#${esc(t)}</span>`).join("")}
+                ${m.tamanho?`<span style="font-size:11px;color:var(--muted);margin-left:4px;">${tamanhoFmt(m.tamanho)}</span>`:""}
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:0;border-top:1px solid var(--border);">
+            <button class="btn-man-abrir" data-man-id="${esc(m.id)}"
+              style="flex:2;padding:9px;background:rgba(0,230,118,.07);border:none;border-right:1px solid var(--border);color:var(--green);font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;">
+              👁️ Abrir PDF
+            </button>
+            <button class="btn-man-editar" data-man-id="${esc(m.id)}"
+              style="flex:1;padding:9px;background:transparent;border:none;border-right:1px solid var(--border);color:var(--muted);font-family:var(--font);font-size:13px;cursor:pointer;">
+              ✏️ Editar
+            </button>
+            <button class="btn-man-excluir" data-man-id="${esc(m.id)}" data-man-nome="${esc(m.nome||m.nome_arquivo||"")}"
+              style="flex:1;padding:9px;background:transparent;border:none;color:var(--red);font-family:var(--font);font-size:13px;cursor:pointer;">
+              🗑️
+            </button>
+          </div>
+        </div>`;
+      }).join("");
+
+      // Abrir PDF
+      lista.querySelectorAll(".btn-man-abrir").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          const id=btn.getAttribute("data-man-id");
+          const url=`${apiBase}/api/manuais/download/${encodeURIComponent(id)}`;
+          // Abrir em nova aba com token no header não funciona diretamente
+          // Usar fetch + blob para abrir o PDF com autenticação
+          toast("📄 Carregando PDF...","info",2500);
+          fetch(url,{headers:{Authorization:`Bearer ${DB.getToken()}`}})
+            .then(r=>{if(!r.ok) throw new Error("Erro ao carregar PDF");return r.blob();})
+            .then(blob=>{
+              const blobUrl=URL.createObjectURL(blob);
+              window.open(blobUrl,"_blank");
+              setTimeout(()=>URL.revokeObjectURL(blobUrl),60000);
+            })
+            .catch(e=>toast(e?.message||"Falha ao abrir PDF","error"));
+        });
+      });
+
+      // Editar metadados
+      lista.querySelectorAll(".btn-man-editar").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          const id=btn.getAttribute("data-man-id");
+          const m=manuais.find(x=>String(x.id)===String(id));
+          if(m) renderFormManual(m);
+        });
+      });
+
+      // Excluir
+      lista.querySelectorAll(".btn-man-excluir").forEach(btn=>{
+        btn.addEventListener("click",async()=>{
+          const id=btn.getAttribute("data-man-id");
+          const nome=btn.getAttribute("data-man-nome");
+          if(!confirm(`Excluir o manual "${nome}"?\nO arquivo será removido permanentemente.`)) return;
+          await runWithUi(async()=>{
+            await DB.request(`/api/manuais/${encodeURIComponent(id)}`,{method:"DELETE"});
+            manuais=manuais.filter(x=>String(x.id)!==String(id));
+            renderLista();
+            toast("✅ Manual excluído.","success");
+          },"Excluindo...");
+        });
+      });
+    }
+
+    function renderFormManual(item=null){
+      const isEdit=!!item;
+      const wrap=document.getElementById("sv-man-form-wrap"); if(!wrap) return;
+      const inStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;`;
+      wrap.innerHTML=`
+        <div class="form-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;">
+            <div style="font-size:15px;font-weight:600;">${isEdit?"✏️ Editar manual":"📤 Enviar novo manual"}</div>
+            <button id="man-form-close" class="btn btn-ghost btn-icon">✕</button>
+          </div>
+          ${!isEdit?`
+          <div style="margin-bottom:14px;">
+            <label style="font-size:13px;font-weight:600;color:var(--muted);display:block;margin-bottom:6px;">Arquivo PDF *</label>
+            <label id="man-upload-label" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+              border:2px dashed var(--border-hi);border-radius:12px;padding:28px 16px;cursor:pointer;
+              background:var(--bg2);text-align:center;transition:border-color .2s;">
+              <span style="font-size:36px;">📄</span>
+              <span style="font-size:14px;font-weight:600;">Toque para selecionar o PDF</span>
+              <span style="font-size:12px;color:var(--muted);">Máximo 20 MB</span>
+              <input type="file" id="man-file-input" accept=".pdf,application/pdf" style="display:none;"/>
+            </label>
+            <div id="man-file-info" style="font-size:12px;color:var(--green);margin-top:6px;text-align:center;"></div>
+          </div>`:""}
+          <div class="form-grid">
+            <div class="field"><label>Nome / Título *</label><input id="man-nome" type="text" value="${esc(item?.nome||"")}" placeholder="Ex: Manual Motor XR-2000" style="${inStyle}text-transform:uppercase;"/></div>
+            <div class="field"><label>Categoria</label><input id="man-cat" type="text" value="${esc(item?.categoria||"")}" placeholder="Ex: Motores, Hidráulicos, Elétrico..." style="${inStyle}text-transform:uppercase;" list="man-cat-list"/>
+              <datalist id="man-cat-list">${cats.map(c=>`<option value="${esc(c)}">`).join("")}</datalist>
+            </div>
+            <div class="field"><label>Descrição</label><textarea id="man-desc" rows="2" placeholder="Breve descrição do conteúdo do manual..." style="${inStyle}resize:vertical;">${esc(item?.descricao||"")}</textarea></div>
+            <div class="field">
+              <label>Tags (separadas por vírgula)</label>
+              <input id="man-tags" type="text" value="${esc(item?.tags||"")}" placeholder="Ex: martelete, compressor, marca abc, modelo 2022" style="${inStyle}text-transform:uppercase;"/>
+              <div style="font-size:11px;color:var(--muted);margin-top:4px;">Use tags para facilitar a busca por palavra-chave</div>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="button" id="man-salvar" class="btn btn-primary" style="width:auto;">
+              ${isEdit?"💾 Salvar alterações":"📤 Enviar PDF"}
+            </button>
+            <button type="button" id="man-cancelar" class="btn btn-ghost">Cancelar</button>
+          </div>
+          <div id="man-progress" style="display:none;margin-top:10px;">
+            <div style="background:var(--bg3);border-radius:8px;height:8px;overflow:hidden;">
+              <div id="man-progress-bar" style="background:var(--green);height:100%;width:0%;transition:width .3s;border-radius:8px;"></div>
+            </div>
+            <div id="man-progress-txt" style="font-size:12px;color:var(--muted);margin-top:4px;text-align:center;">Enviando...</div>
+          </div>
+        </div>`;
+      setTimeout(()=>wrap.scrollIntoView({behavior:"smooth",block:"start"}),60);
+
+      document.getElementById("man-form-close")?.addEventListener("click",()=>{wrap.innerHTML="";});
+      document.getElementById("man-cancelar")?.addEventListener("click",()=>{wrap.innerHTML="";});
+
+      // Preview arquivo selecionado
+      let arquivoSelecionado=null;
+      if(!isEdit){
+        const fileInput=document.getElementById("man-file-input");
+        const fileInfo=document.getElementById("man-file-info");
+        const uploadLabel=document.getElementById("man-upload-label");
+        fileInput?.addEventListener("change",e=>{
+          const f=e.target.files[0];
+          if(!f) return;
+          if(!f.type.includes("pdf")&&!f.name.toLowerCase().endsWith(".pdf")){
+            toast("Apenas arquivos PDF são aceitos.","warning"); fileInput.value=""; return;
+          }
+          if(f.size>20*1024*1024){toast("Arquivo muito grande (máx. 20MB).","warning");fileInput.value="";return;}
+          arquivoSelecionado=f;
+          fileInfo.textContent=`✅ ${f.name} (${tamanhoFmt(f.size)})`;
+          uploadLabel.style.borderColor="var(--green)";
+          // Preencher nome automaticamente se vazio
+          const nomeInput=document.getElementById("man-nome");
+          if(nomeInput&&!nomeInput.value){
+            nomeInput.value=f.name.replace(/\.pdf$/i,"").replace(/[-_]/g," ").toUpperCase();
+          }
+        });
+      }
+
+      // Salvar
+      document.getElementById("man-salvar")?.addEventListener("click",async()=>{
+        const nome=String(document.getElementById("man-nome")?.value||"").trim().toUpperCase();
+        const cat=String(document.getElementById("man-cat")?.value||"").trim().toUpperCase();
+        const desc=String(document.getElementById("man-desc")?.value||"").trim();
+        const tags=String(document.getElementById("man-tags")?.value||"").trim().toUpperCase();
+
+        if(!nome){toast("Informe o nome/título do manual.","warning");return;}
+
+        if(isEdit){
+          await runWithUi(async()=>{
+            await DB.request(`/api/manuais/${encodeURIComponent(item.id)}`,{
+              method:"PUT",body:JSON.stringify({nome,descricao:desc,tags,categoria:cat})
+            });
+            const idx=manuais.findIndex(x=>String(x.id)===String(item.id));
+            if(idx>=0) manuais[idx]={...manuais[idx],nome,descricao:desc,tags,categoria:cat};
+            wrap.innerHTML=""; renderLista();
+            toast("✅ Manual atualizado.","success");
+          },"Salvando...");
+          return;
+        }
+
+        if(!arquivoSelecionado){toast("Selecione um arquivo PDF.","warning");return;}
+
+        // Upload com XMLHttpRequest para ter progresso real
+        const token=DB.getToken();
+        const apiUrl=`${apiBase}/api/manuais`;
+        const fd=new FormData();
+        fd.append("arquivo",arquivoSelecionado,arquivoSelecionado.name);
+        fd.append("nome",nome);
+        fd.append("descricao",desc);
+        fd.append("tags",tags);
+        fd.append("categoria",cat);
+
+        const prog=document.getElementById("man-progress");
+        const progBar=document.getElementById("man-progress-bar");
+        const progTxt=document.getElementById("man-progress-txt");
+        if(prog) prog.style.display="block";
+
+        const salvarBtn=document.getElementById("man-salvar");
+        if(salvarBtn) salvarBtn.disabled=true;
+
+        try{
+          await new Promise((resolve,reject)=>{
+            const xhr=new XMLHttpRequest();
+            xhr.open("POST",apiUrl);
+            xhr.setRequestHeader("Authorization",`Bearer ${token}`);
+            xhr.upload.addEventListener("progress",e=>{
+              if(e.lengthComputable){
+                const pct=Math.round(e.loaded/e.total*100);
+                if(progBar) progBar.style.width=pct+"%";
+                if(progTxt) progTxt.textContent=`Enviando... ${pct}% (${tamanhoFmt(e.loaded)} de ${tamanhoFmt(e.total)})`;
+              }
+            });
+            xhr.addEventListener("load",()=>{
+              if(xhr.status>=200&&xhr.status<300){
+                try{const novo=JSON.parse(xhr.responseText);manuais.unshift(novo);}catch{}
+                resolve(null);
+              } else {
+                try{const e=JSON.parse(xhr.responseText);reject(new Error(e.error||`HTTP ${xhr.status}`));}
+                catch{reject(new Error(`HTTP ${xhr.status}`));}
+              }
+            });
+            xhr.addEventListener("error",()=>reject(new Error("Falha de conexão")));
+            xhr.send(fd);
+          });
+          wrap.innerHTML=""; renderLista();
+          toast("✅ Manual enviado com sucesso!","success");
+        }catch(e){
+          toast(e?.message||"Erro ao enviar PDF","error",6000);
+          if(salvarBtn) salvarBtn.disabled=false;
+          if(prog) prog.style.display="none";
+        }
+      });
+    }
+
+    // ── Render principal ──────────────────────────────────────────
+    root.innerHTML=`
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <div class="card-title">📚 Manuais & Instruções</div>
+          <div style="display:flex;gap:6px;">
+            <button id="btn-man-novo" class="btn btn-primary" style="width:auto;">📤 Enviar PDF</button>
+            <button id="btn-man-refresh" class="btn btn-secondary btn-icon">↻</button>
+          </div>
+        </div>
+
+        <!-- Busca -->
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <div class="search-wrap" style="flex:1;min-width:180px;">
+            <span class="search-icon">🔍</span>
+            <input id="man-search" type="search" placeholder="Buscar por nome, tag ou palavra-chave..." value="${esc(F.q)}" autocomplete="off"/>
+          </div>
+          ${cats.length?`<select id="man-filter-cat" style="padding:10px 12px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:13px;">
+            <option value="">Todas as categorias</option>
+            ${cats.map(c=>`<option value="${esc(c)}" ${F.cat===c?"selected":""}>${esc(c)}</option>`).join("")}
+          </select>`:""}
+        </div>
+
+        <!-- Resultado -->
+        <div style="margin-top:8px;font-size:12px;color:var(--muted);">
+          ${filtraManuais().length} manual${filtraManuais().length!==1?"is":""} encontrado${filtraManuais().length!==1?"s":""}
+          ${manuais.length&&F.q?` de ${manuais.length} total`:""}
+        </div>
+      </div>
+
+      <div id="sv-man-form-wrap"></div>
+      <div id="sv-man-lista"></div>
+    `;
+
+    renderLista();
+
+    document.getElementById("man-search")?.addEventListener("input",e=>{
+      F.q=e.target.value; renderLista();
+      // atualizar contador
+      const cont=root.querySelector("[style*='12px'][style*='muted']");
+    });
+    document.getElementById("man-filter-cat")?.addEventListener("change",e=>{
+      F.cat=e.target.value; renderLista();
+    });
+    document.getElementById("btn-man-novo")?.addEventListener("click",()=>renderFormManual(null));
+    document.getElementById("btn-man-refresh")?.addEventListener("click",async()=>{
+      await runWithUi(async()=>{
+        manuais=safeArray(await DB.request("/api/manuais",{method:"GET"}));
+        renderManuais(root);
+      },"Atualizando...");
+    });
   }
 
   // ─── Rotas com Geolocalização ─────────────────────────────────────────────────
@@ -2350,7 +2681,7 @@
       $("#sv-perm-cancel")?.addEventListener("click",()=>{fw.innerHTML="";});
 
       if(u.role==="seller"){
-        function lerPerms(){
+        const lerPerms=()=>{
           const novas={};
           $$("[data-perm-rec]",fw).forEach(chk=>{
             const rec=chk.getAttribute("data-perm-rec"),acao=chk.getAttribute("data-perm-acao");
@@ -2358,7 +2689,7 @@
             novas[rec][acao]=chk.checked;
           });
           return novas;
-        }
+        };
         $("#btn-liberar-tudo")?.addEventListener("click",()=>{$$("[data-perm-rec]",fw).forEach(chk=>{chk.checked=true;});});
         $("#btn-bloquear-tudo")?.addEventListener("click",()=>{$$("[data-perm-rec]",fw).forEach(chk=>{chk.checked=false;});});
         $("#btn-salvar-perm")?.addEventListener("click",async()=>{
