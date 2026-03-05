@@ -261,7 +261,23 @@ export default {
           exp: Date.now() + 30 * 24 * 60 * 60 * 1000,
         });
 
-        return json({ token, user, vendor: user });
+        // Registrar log de login
+        try {
+          const logId = "LG-" + String(Date.now()).slice(-8);
+          await env.DB.prepare(
+            `INSERT INTO logs (id,vendor_id,user_id,user_name,acao,recurso,detalhe,created_at)
+             VALUES (?,?,?,?,?,?,?,?)`
+          ).bind(logId, v.id, v.id, v.name, "login", "sistema", `Login de ${v.email}`, nowISO()).run();
+        } catch {}
+
+        // Carregar permissões do usuário
+        let permissions: Record<string,any> = {};
+        try {
+          const vFull = await env.DB.prepare("SELECT permissions FROM vendors WHERE id=?").bind(v.id).first<any>();
+          permissions = JSON.parse(vFull?.permissions || "{}");
+        } catch {}
+
+        return json({ token, user: {...user, permissions}, vendor: {...user, permissions} });
       }
 
       // Registro — primeiro usuário admin
@@ -304,10 +320,12 @@ export default {
       // Me
       if (p[1] === "me" && req.method === "GET") {
         const v = await env.DB.prepare(
-          "SELECT id,email,name,role,active,created_at FROM vendors WHERE id=?"
+          "SELECT id,email,name,role,active,created_at,permissions FROM vendors WHERE id=?"
         ).bind(vendorId).first<any>();
         if (!v) return bad("Usuário não encontrado.", 404);
-        return json({ user: v });
+        let permissions: Record<string,any> = {};
+        try { permissions = JSON.parse(v.permissions || "{}"); } catch {}
+        return json({ user: { ...v, permissions } });
       }
 
       /** =================== BACKUP =================== **/
@@ -379,6 +397,12 @@ export default {
             binds.push(salt, hash);
           }
 
+          // Salvar permissões customizadas (só se não for admin)
+          if (body.permissions !== undefined) {
+            updates.push("permissions=?");
+            binds.push(JSON.stringify(body.permissions || {}));
+          }
+
           if (updates.length === 0) return bad("Nenhum campo para atualizar.", 400);
           binds.push(p[2]);
 
@@ -387,14 +411,69 @@ export default {
           ).bind(...binds).run();
 
           const row = await env.DB.prepare(
-            "SELECT id,email,name,role,active,created_at FROM vendors WHERE id=?"
+            "SELECT id,email,name,role,active,created_at,permissions FROM vendors WHERE id=?"
           ).bind(p[2]).first<any>();
-          return json(row || {});
+          let permissions: Record<string,any> = {};
+          try { permissions = JSON.parse((row as any)?.permissions || "{}"); } catch {}
+          return json({ ...(row || {}), permissions });
         }
+      }
+
+      /** =================== LOGS (admin) =================== **/
+      if (p[1] === "logs") {
+        if (claim.role !== "admin") return bad("Acesso restrito.", 403);
+
+        // GET lista de logs com filtro opcional por user_id
+        if (req.method === "GET" && !p[2]) {
+          const url = new URL(req.url);
+          const userId = url.searchParams.get("user_id") || "";
+          const limit = Math.min(Number(url.searchParams.get("limit") || "200"), 500);
+          const rows = userId
+            ? await env.DB.prepare(
+                "SELECT * FROM logs WHERE vendor_id=? AND user_id=? ORDER BY created_at DESC LIMIT ?"
+              ).bind(vendorId, userId, limit).all<any>()
+            : await env.DB.prepare(
+                "SELECT * FROM logs WHERE vendor_id=? ORDER BY created_at DESC LIMIT ?"
+              ).bind(vendorId, limit).all<any>();
+          return json(rows.results || []);
+        }
+      }
+
+      // Helper: registrar log de atividade (fire-and-forget)
+      async function logAtividade(acao: string, recurso: string, detalhe: string) {
+        try {
+          const user = await env.DB.prepare("SELECT name FROM vendors WHERE id=?").bind(vendorId).first<any>();
+          const logId = "LG-" + String(Date.now()).slice(-8) + Math.random().toString(36).slice(2,5);
+          await env.DB.prepare(
+            `INSERT INTO logs (id,vendor_id,user_id,user_name,acao,recurso,detalhe,created_at)
+             VALUES (?,?,?,?,?,?,?,?)`
+          ).bind(logId, vendorId, vendorId, user?.name || vendorId, acao, recurso, detalhe.slice(0,300), nowISO()).run();
+        } catch {}
+      }
+
+      // Helper: checar permissão do usuário
+      async function temPermissao(recurso: string, acao: string): Promise<boolean> {
+        if (claim.role === "admin") return true; // admin sempre passa
+        const v = await env.DB.prepare("SELECT permissions,role FROM vendors WHERE id=?").bind(vendorId).first<any>();
+        if (!v) return false;
+        if (v.role === "admin") return true;
+        try {
+          const perms = JSON.parse(v.permissions || "{}");
+          // Se não tem permissões configuradas, seller tem acesso total
+          if (!perms || Object.keys(perms).length === 0) return true;
+          const recursoPerms = perms[recurso];
+          if (recursoPerms === false) return false;
+          if (typeof recursoPerms === "object" && recursoPerms !== null) {
+            return recursoPerms[acao] !== false;
+          }
+          return true;
+        } catch { return true; }
       }
 
       /** =================== CLIENTES =================== **/
       if (p[1] === "clientes") {
+        if (!await temPermissao("clientes","ver")) return bad("Sem permissão para acessar clientes.", 403);
+
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
             "SELECT * FROM clientes WHERE vendor_id=? ORDER BY nome ASC"
@@ -430,6 +509,7 @@ export default {
         }
 
         if (req.method === "POST") {
+          if (!await temPermissao("clientes","criar")) return bad("Sem permissão para criar clientes.", 403);
           const body = await readJson<any>(req);
           const nome = String(body.nome || "").trim();
           if (!nome) return bad("Nome é obrigatório.", 400);
@@ -458,10 +538,12 @@ export default {
 
           const row = await env.DB.prepare("SELECT * FROM clientes WHERE id=? AND vendor_id=?")
             .bind(id, vendorId).first<any>();
+          await logAtividade("criar", "clientes", `Cliente ${nome} (${id})`);
           return json({ ...row, tags: parseJSONField(row?.tags, []) });
         }
 
         if (req.method === "PUT" && p[2]) {
+          if (!await temPermissao("clientes","editar")) return bad("Sem permissão para editar clientes.", 403);
           const body = await readJson<any>(req);
           const tags = JSON.stringify(Array.isArray(body.tags) ? body.tags : []);
 
@@ -481,18 +563,22 @@ export default {
 
           const row = await env.DB.prepare("SELECT * FROM clientes WHERE id=? AND vendor_id=?")
             .bind(p[2], vendorId).first<any>();
+          await logAtividade("editar", "clientes", `Cliente ${body.nome||""} (${p[2]})`);
           return json({ ...row, tags: parseJSONField(row?.tags, []) });
         }
 
         if (req.method === "DELETE" && p[2]) {
+          if (!await temPermissao("clientes","excluir")) return bad("Sem permissão para excluir clientes.", 403);
           await env.DB.prepare("DELETE FROM clientes WHERE id=? AND vendor_id=?")
             .bind(p[2], vendorId).run();
+          await logAtividade("excluir", "clientes", `Cliente ${p[2]} excluído`);
           return json({ ok: true });
         }
       }
 
       /** =================== PRODUTOS / MERCADORIAS =================== **/
       if (p[1] === "produtos" || p[1] === "mercadorias") {
+        if (!await temPermissao("mercadorias","ver")) return bad("Sem permissão para acessar mercadorias.", 403);
         const table = "produtos";
 
         if (req.method === "GET" && !p[2]) {
@@ -588,6 +674,7 @@ export default {
 
       /** =================== PEDIDOS =================== **/
       if (p[1] === "pedidos") {
+        if (!await temPermissao("pedidos","ver")) return bad("Sem permissão para acessar pedidos.", 403);
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
             "SELECT * FROM pedidos WHERE vendor_id=? ORDER BY created_at DESC"
@@ -625,10 +712,12 @@ export default {
 
           const row = await env.DB.prepare("SELECT * FROM pedidos WHERE id=? AND vendor_id=?")
             .bind(id, vendorId).first<any>();
+          await logAtividade("criar", "pedidos", `Pedido ${id} - Cliente: ${body.clienteNome||""} - Total: R$${body.total||0}`);
           return json({ ...row, itens: parseJSONField(row?.itens, []) });
         }
 
         if (req.method === "PUT" && p[2]) {
+          if (!await temPermissao("pedidos","editar")) return bad("Sem permissão para editar pedidos.", 403);
           const body = await readJson<any>(req);
           const itens = JSON.stringify(body.itens || []);
 
@@ -646,18 +735,22 @@ export default {
 
           const row = await env.DB.prepare("SELECT * FROM pedidos WHERE id=? AND vendor_id=?")
             .bind(p[2], vendorId).first<any>();
+          await logAtividade("editar", "pedidos", `Pedido ${p[2]} - Status: ${body.status||""} - Total: R$${body.total||0}`);
           return json({ ...row, itens: parseJSONField(row?.itens, []) });
         }
 
         if (req.method === "DELETE" && p[2]) {
+          if (!await temPermissao("pedidos","excluir")) return bad("Sem permissão para excluir pedidos.", 403);
           await env.DB.prepare("DELETE FROM pedidos WHERE id=? AND vendor_id=?")
             .bind(p[2], vendorId).run();
+          await logAtividade("excluir", "pedidos", `Pedido ${p[2]} excluído`);
           return json({ ok: true });
         }
       }
 
       /** =================== DESPESAS =================== **/
       if (p[1] === "despesas") {
+        if (!await temPermissao("despesas","ver")) return bad("Sem permissão para acessar despesas.", 403);
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
             "SELECT * FROM despesas WHERE vendor_id=? ORDER BY data DESC, created_at DESC"
