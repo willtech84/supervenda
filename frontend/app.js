@@ -421,12 +421,24 @@
     const route=getRoute(state.route);
     if(route.id==="dashboard"){renderDashboard(root);return;}
     if(route.id==="usuarios"){renderUsersScreen(root);return;}
-    if(route.id==="financeiro"){renderFinanceiro(root);return;}
-    if(route.id==="relatorios"){renderRelatorios(root);return;}
-    if(route.id==="rotas"){renderRotas(root);return;}
-    // Detalhes de cliente
+    if(route.id==="financeiro"){
+      if(!temPermissaoLocal("financeiro")){root.innerHTML=`<div class="card"><p style="color:var(--red);">🚫 Sem permissão para acessar Financeiro.</p></div>`;return;}
+      renderFinanceiro(root);return;
+    }
+    if(route.id==="relatorios"){
+      if(!temPermissaoLocal("relatorios")){root.innerHTML=`<div class="card"><p style="color:var(--red);">🚫 Sem permissão para acessar Relatórios.</p></div>`;return;}
+      renderRelatorios(root);return;
+    }
+    if(route.id==="rotas"){
+      if(!temPermissaoLocal("rotas")){root.innerHTML=`<div class="card"><p style="color:var(--red);">🚫 Sem permissão para acessar Rotas.</p></div>`;return;}
+      renderRotas(root);return;
+    }
     if(state._clienteId){renderClienteDetalhes(root,state._clienteId);return;}
-    if(route.resource&&SCHEMAS[route.resource]){renderCrudScreen(root,route.resource);return;}
+    if(route.resource&&SCHEMAS[route.resource]){
+      const recurso=route.resource==="notas"?"anotacoes":route.resource;
+      if(!temPermissaoLocal(recurso)){root.innerHTML=`<div class="card"><p style="color:var(--red);">🚫 Sem permissão para acessar ${esc(route.label)}.</p></div>`;return;}
+      renderCrudScreen(root,route.resource);return;
+    }
     root.innerHTML=`<div class="card"><p style="color:var(--muted);">Tela em preparação.</p></div>`;
   }
 
@@ -2098,38 +2110,177 @@
     });
   }
 
-  // Users
+  // Users + Permissões + Logs
   async function renderUsersScreen(root){
     const user=DB.getUser();
     if(!user||user.role!=="admin"){root.innerHTML=`<div class="card"><div class="card-title">👤 Usuários</div><p style="color:var(--red);font-size:14px;margin-top:8px;">Acesso restrito ao administrador.</p></div>`;return;}
     let users=[];
     try{users=safeArray(await DB.listUsers());}catch(e){root.innerHTML=`<div class="card"><div class="card-title">👤 Usuários</div><p style="color:var(--red);font-size:14px;margin-top:8px;">${esc(e?.message||"Falha")}</p></div>`;return;}
+
     const base=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;-webkit-appearance:none;`;
+
+    // Tabs: Usuários | Auditoria
+    if(!state._userTab) state._userTab="usuarios";
+
+    function chkStyle(on){return `display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:${on?"rgba(0,230,118,.1)":"var(--bg2)"};border:1px solid ${on?"rgba(0,230,118,.3)":"var(--border)"};border-radius:8px;cursor:pointer;font-size:13px;color:${on?"var(--green)":"var(--text)"};font-family:var(--font);`;}
+
+    // Definição de recursos e ações
+    const RECURSOS=[
+      {key:"clientes",    label:"👥 Clientes",    acoes:["ver","criar","editar","excluir"]},
+      {key:"mercadorias", label:"📦 Mercadorias", acoes:["ver","criar","editar","excluir"]},
+      {key:"pedidos",     label:"🛒 Pedidos",     acoes:["ver","criar","editar","excluir"]},
+      {key:"despesas",    label:"💸 Despesas",    acoes:["ver","criar","editar","excluir"]},
+      {key:"lembretes",   label:"🔔 Lembretes",   acoes:["ver","criar","editar","excluir"]},
+      {key:"anotacoes",   label:"📝 Anotações",   acoes:["ver","criar","editar","excluir"]},
+      {key:"rotas",       label:"🗺️ Rotas",       acoes:["ver","criar","editar","excluir"]},
+      {key:"financeiro",  label:"💰 Financeiro",  acoes:["ver"]},
+      {key:"relatorios",  label:"📈 Relatórios",  acoes:["ver"]},
+    ];
+
+    function permChecked(perms,recurso,acao){
+      if(!perms||Object.keys(perms).length===0) return true; // sem restrições = tudo liberado
+      const r=perms[recurso];
+      if(r===false) return false;
+      if(typeof r==="object"&&r!==null) return r[acao]!==false;
+      return true;
+    }
+
+    function renderPermissoes(u){
+      const perms=u.permissions||{};
+      const isSeller=u.role==="seller";
+      if(!isSeller) return `<div style="font-size:12px;color:var(--muted);padding:8px;">Administradores têm acesso total a tudo.</div>`;
+      return`<div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead><tr style="background:var(--bg);">
+            <th style="padding:8px;text-align:left;font-weight:600;border-bottom:1px solid var(--border);">Módulo</th>
+            <th style="padding:8px;text-align:center;border-bottom:1px solid var(--border);">Ver</th>
+            <th style="padding:8px;text-align:center;border-bottom:1px solid var(--border);">Criar</th>
+            <th style="padding:8px;text-align:center;border-bottom:1px solid var(--border);">Editar</th>
+            <th style="padding:8px;text-align:center;border-bottom:1px solid var(--border);">Excluir</th>
+          </tr></thead>
+          <tbody>
+            ${RECURSOS.map(r=>`<tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:8px;font-weight:500;">${r.label}</td>
+              ${["ver","criar","editar","excluir"].map(a=>{
+                const temAcao=r.acoes.includes(a);
+                if(!temAcao) return`<td style="padding:8px;text-align:center;color:var(--muted);">—</td>`;
+                const on=permChecked(perms,r.key,a);
+                return`<td style="padding:8px;text-align:center;">
+                  <input type="checkbox" data-perm-rec="${r.key}" data-perm-acao="${a}" ${on?"checked":""}
+                    style="width:16px;height:16px;accent-color:var(--green);cursor:pointer;"/>
+                </td>`;
+              }).join("")}
+            </tr>`).join("")}
+          </tbody>
+        </table>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;padding:4px;">
+          ✅ Marcado = permitido · ☐ Desmarcado = bloqueado · Dados inseridos pelo vendedor ficam visíveis ao admin sempre
+        </div>
+      </div>`;
+    }
+
     root.innerHTML=`
       <div class="card">
         <div class="card-header">
-          <div class="card-title">👤 Usuários</div>
-          <div style="display:flex;gap:6px;"><button id="sv-user-new" class="btn btn-primary" style="width:auto;">+ Novo</button><button id="sv-user-refresh" class="btn btn-secondary btn-icon">↻</button></div>
+          <div class="card-title">👤 Usuários & Acesso</div>
+          <div style="display:flex;gap:6px;">
+            <button id="sv-user-new" class="btn btn-primary" style="width:auto;${state._userTab==="logs"?"display:none":""}">+ Novo</button>
+            <button id="sv-user-refresh" class="btn btn-secondary btn-icon">↻</button>
+          </div>
         </div>
-        <div style="font-size:12px;color:var(--muted);">${users.length} usuário${users.length!==1?"s":""}</div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button id="tab-usuarios" class="btn ${state._userTab==="usuarios"?"btn-primary":"btn-secondary"}" style="font-size:13px;">👥 Usuários</button>
+          <button id="tab-logs" class="btn ${state._userTab==="logs"?"btn-primary":"btn-secondary"}" style="font-size:13px;">📋 Auditoria</button>
+        </div>
       </div>
       <div id="sv-users-form-wrap"></div>
-      <div id="sv-users-list">
-        ${users.length?users.map(u=>`
-          <div class="list-item">
-            <div class="list-item-top">
-              <div><div class="list-item-title">${esc(u.name||"")}</div><div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(u.email||"")}</div></div>
-              <span class="badge ${u.role==="admin"?"badge-blue":"badge-muted"}">${esc(u.role||"seller")}</span>
-            </div>
-            <div class="list-item-meta">
-              <span class="meta-item">Ativo: <strong style="color:${Number(u.active)?"var(--green)":"var(--red)"}">${Number(u.active)?"Sim":"Não"}</strong></span>
-              ${u.created_at?`<span class="meta-item">Desde: <strong>${dateFormatBR(u.created_at)}</strong></span>`:""}
-            </div>
-            <div class="list-item-actions"><button class="btn btn-secondary" style="font-size:13px;padding:7px 14px;" data-user-edit="${esc(u.id||"")}">✏️ Editar</button></div>
-          </div>`).join(""):`<div class="empty-state"><div class="empty-icon">👤</div><div class="empty-text">Nenhum usuário.</div></div>`}
-      </div>`;
+      <div id="sv-users-content"></div>`;
 
+    const content=$("#sv-users-content");
     const fw=$("#sv-users-form-wrap");
+
+    function renderTabUsuarios(){
+      content.innerHTML=users.length?users.map(u=>`
+        <div class="list-item">
+          <div class="list-item-top">
+            <div>
+              <div class="list-item-title">${esc(u.name||"")}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(u.email||"")}</div>
+            </div>
+            <span class="badge ${u.role==="admin"?"badge-blue":"badge-muted"}">${u.role==="admin"?"Admin":"Vendedor"}</span>
+          </div>
+          <div class="list-item-meta">
+            <span class="meta-item">Ativo: <strong style="color:${Number(u.active)?"var(--green)":"var(--red)"}">${Number(u.active)?"Sim":"Não"}</strong></span>
+            ${u.created_at?`<span class="meta-item">Desde: <strong>${dateFormatBR(u.created_at)}</strong></span>`:""}
+          </div>
+          <div class="list-item-actions">
+            <button class="btn btn-secondary" style="font-size:13px;padding:7px 14px;" data-user-edit="${esc(u.id||"")}">✏️ Editar</button>
+            <button class="btn btn-secondary" style="font-size:13px;padding:7px 14px;" data-user-perm="${esc(u.id||"")}">🔐 Permissões</button>
+            <button class="btn btn-secondary" style="font-size:13px;padding:7px 14px;" data-user-logs="${esc(u.id||"")}">📋 Logs</button>
+          </div>
+        </div>`).join(""):`<div class="empty-state"><div class="empty-icon">👤</div><div class="empty-text">Nenhum usuário.</div></div>`;
+
+      // Bind botões
+      $$("[data-user-edit]",content).forEach(btn=>{
+        btn.addEventListener("click",()=>{const id=btn.getAttribute("data-user-edit");const u=users.find(x=>String(x.id)===String(id));if(u)renderUserForm(u);});
+      });
+      $$("[data-user-perm]",content).forEach(btn=>{
+        btn.addEventListener("click",()=>{const id=btn.getAttribute("data-user-perm");const u=users.find(x=>String(x.id)===String(id));if(u)renderPermForm(u);});
+      });
+      $$("[data-user-logs]",content).forEach(btn=>{
+        btn.addEventListener("click",()=>{const id=btn.getAttribute("data-user-logs");const u=users.find(x=>String(x.id)===String(id));if(u)carregarLogs(id,u.name);});
+      });
+    }
+
+    async function renderTabLogs(userId="",userName="Todos"){
+      content.innerHTML=`<div class="card"><div style="font-size:13px;color:var(--muted);">Carregando logs...</div></div>`;
+      try{
+        const url=userId?`/api/logs?user_id=${encodeURIComponent(userId)}&limit=200`:"/api/logs?limit=200";
+        const logs=safeArray(await DB.request(url,{method:"GET"}));
+        const icoMap={login:"🔑",criar:"➕",editar:"✏️",excluir:"🗑️"};
+        content.innerHTML=`
+          <div class="card">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+              <div style="font-size:14px;font-weight:600;">📋 Auditoria — ${esc(userName)} (${logs.length})</div>
+              <div style="display:flex;gap:6px;">
+                ${userId?`<button id="log-todos" class="btn btn-secondary" style="font-size:12px;">Ver todos</button>`:""}
+                <select id="log-filtro-recurso" style="padding:7px 10px;background:var(--bg);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;">
+                  <option value="">Todos os módulos</option>
+                  ${[...new Set(logs.map(l=>l.recurso))].map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join("")}
+                </select>
+              </div>
+            </div>
+            <div id="log-lista">
+              ${logs.length?logs.map(l=>`
+                <div class="log-item" data-recurso="${esc(l.recurso||"")}" style="display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-bottom:1px solid var(--border);">
+                  <div style="font-size:18px;flex-shrink:0;width:24px;text-align:center;">${icoMap[l.acao]||"📌"}</div>
+                  <div style="flex:1;min-width:0;">
+                    <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(l.detalhe||"")}</div>
+                    <div style="font-size:11px;color:var(--muted);margin-top:2px;">
+                      <span style="font-weight:600;color:var(--blue);">${esc(l.user_name||"")}</span>
+                      · ${esc(l.recurso||"")} · ${esc(l.acao||"")}
+                    </div>
+                  </div>
+                  <div style="font-size:11px;color:var(--muted);flex-shrink:0;white-space:nowrap;">${l.created_at?new Date(l.created_at).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):""}</div>
+                </div>`).join(""):`<div style="padding:24px;text-align:center;color:var(--muted);">Nenhum registro de atividade.</div>`}
+            </div>
+          </div>`;
+
+        $("#log-todos")?.addEventListener("click",()=>carregarLogs("","Todos"));
+        $("#log-filtro-recurso")?.addEventListener("change",e=>{
+          const val=e.target.value;
+          $$(".log-item",content).forEach(el=>{
+            el.style.display=!val||el.getAttribute("data-recurso")===val?"":"none";
+          });
+        });
+      }catch(e){content.innerHTML=`<div class="card"><p style="color:var(--red);">${esc(e?.message||"Erro ao carregar logs")}</p></div>`;}
+    }
+
+    async function carregarLogs(userId,userName){
+      state._userTab="logs";
+      await renderTabLogs(userId,userName);
+    }
+
     function renderUserForm(item){
       const isEdit=!!item;
       fw.innerHTML=`
@@ -2163,13 +2314,84 @@
         if(!isEdit&&!p.password) return toast("Senha obrigatória.","warning");
         await runWithUi(async()=>{
           if(isEdit){if(!p.password) delete p.password;await DB.updateUser(item.id,p);}else await DB.createUser(p);
-          toast(`✅ Usuário ${isEdit?"atualizado":"criado"}.`,"success");await renderUsersScreen(root);
+          toast(`✅ Usuário ${isEdit?"atualizado":"criado"}.`,"success");fw.innerHTML="";await renderUsersScreen(root);
         },isEdit?"Salvando...":"Criando...");
       });
     }
+
+    function renderPermForm(u){
+      const perms=u.permissions||{};
+      fw.innerHTML=`
+        <div class="form-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+            <div>
+              <div style="font-size:15px;font-weight:600;">🔐 Permissões — ${esc(u.name||"")}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px;">Controle o que este usuário pode ver e fazer</div>
+            </div>
+            <button id="sv-perm-close" class="btn btn-ghost btn-icon">✕</button>
+          </div>
+          ${u.role==="admin"?`<div style="padding:12px;background:rgba(68,136,255,.08);border:1px solid rgba(68,136,255,.2);border-radius:10px;font-size:13px;color:var(--blue);">
+            Este usuário é <strong>Administrador</strong> e tem acesso total a todos os módulos.
+            Para restringir acesso, mude o perfil para <strong>Vendedor</strong> primeiro.
+          </div>`:`
+          <div id="sv-perm-table">${renderPermissoes(u)}</div>
+          <div style="margin-top:6px;padding:10px;background:rgba(255,179,0,.06);border:1px solid rgba(255,179,0,.2);border-radius:9px;font-size:12px;color:var(--muted);">
+            ⚠️ Todos os dados inseridos pelo vendedor (pedidos, clientes, etc.) ficam visíveis ao administrador, independente das permissões.
+          </div>
+          <div class="form-actions">
+            <button type="button" id="btn-salvar-perm" class="btn btn-primary" style="width:auto;">💾 Salvar permissões</button>
+            <button type="button" id="btn-liberar-tudo" class="btn btn-secondary" style="font-size:13px;">✅ Liberar tudo</button>
+            <button type="button" id="btn-bloquear-tudo" class="btn btn-secondary" style="font-size:13px;">🚫 Bloquear tudo</button>
+            <button type="button" id="sv-perm-cancel" class="btn btn-ghost">Cancelar</button>
+          </div>`}
+        </div>`;
+      setTimeout(()=>fw?.scrollIntoView({behavior:"smooth",block:"start"}),60);
+      $("#sv-perm-close")?.addEventListener("click",()=>{fw.innerHTML="";});
+      $("#sv-perm-cancel")?.addEventListener("click",()=>{fw.innerHTML="";});
+
+      if(u.role==="seller"){
+        function lerPerms(){
+          const novas={};
+          $$("[data-perm-rec]",fw).forEach(chk=>{
+            const rec=chk.getAttribute("data-perm-rec"),acao=chk.getAttribute("data-perm-acao");
+            if(!novas[rec]) novas[rec]={};
+            novas[rec][acao]=chk.checked;
+          });
+          return novas;
+        }
+        $("#btn-liberar-tudo")?.addEventListener("click",()=>{$$("[data-perm-rec]",fw).forEach(chk=>{chk.checked=true;});});
+        $("#btn-bloquear-tudo")?.addEventListener("click",()=>{$$("[data-perm-rec]",fw).forEach(chk=>{chk.checked=false;});});
+        $("#btn-salvar-perm")?.addEventListener("click",async()=>{
+          const novas=lerPerms();
+          await runWithUi(async()=>{
+            await DB.updateUser(u.id,{permissions:novas});
+            toast("✅ Permissões salvas.","success");fw.innerHTML="";await renderUsersScreen(root);
+          },"Salvando permissões...");
+        });
+      }
+    }
+
+    // Renderizar tab atual
+    if(state._userTab==="logs") await renderTabLogs();
+    else renderTabUsuarios();
+
+    // Tab switchers
+    $("#tab-usuarios")?.addEventListener("click",()=>{state._userTab="usuarios";renderTabUsuarios();$("#sv-user-new").style.display="";});
+    $("#tab-logs")?.addEventListener("click",()=>{state._userTab="logs";renderTabLogs();$("#sv-user-new").style.display="none";});
     $("#sv-user-new")?.addEventListener("click",()=>renderUserForm(null));
     $("#sv-user-refresh")?.addEventListener("click",async()=>{await runWithUi(()=>renderUsersScreen(root),"Atualizando...");});
-    $$("[data-user-edit]").forEach(btn=>{btn.addEventListener("click",()=>{const id=btn.getAttribute("data-user-edit");const u=users.find(x=>String(x.id)===String(id));if(u)renderUserForm(u);});});
+  }
+
+  // Verificar permissão local antes de navegar (bloqueio no front)
+  function temPermissaoLocal(recurso,acao="ver"){
+    const u=DB.getUser(); if(!u) return false;
+    if(u.role==="admin") return true;
+    const perms=u.permissions||{};
+    if(!perms||Object.keys(perms).length===0) return true;
+    const r=perms[recurso];
+    if(r===false) return false;
+    if(typeof r==="object"&&r!==null) return r[acao]!==false;
+    return true;
   }
 
   // Shell
