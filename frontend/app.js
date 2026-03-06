@@ -83,26 +83,46 @@
     return safeArray(state.cache.lembretes).filter(l=>{const s=String(l.status||"").toLowerCase();return !s.includes("conclu")&&!s.includes("cancel");}).length;
   }
 
+  // Mapa de rota -> recurso de permissão
+  const ROTA_PERM={
+    clientes:"clientes", mercadorias:"mercadorias", pedidos:"pedidos",
+    despesas:"despesas", lembretes:"lembretes", anotacoes:"anotacoes",
+    rotas:"rotas", financeiro:"financeiro", relatorios:"relatorios",
+    manuais:"manuais",
+  };
+
+  function rotaPermitida(routeId){
+    const u=DB.getUser(); if(!u) return false;
+    if(u.role==="admin") return true;
+    // dashboard e usuarios sempre visíveis
+    if(routeId==="dashboard"||routeId==="usuarios") return true;
+    const permKey=ROTA_PERM[routeId];
+    if(!permKey) return true; // rota sem mapeamento = permitida
+    return temPermissaoLocal(permKey,"ver");
+  }
+
   function renderNav(){
     const nav=$("#sidebar-nav");
     if(nav){
-      nav.innerHTML=`<div class="nav-section-label">Menu</div>`+ROUTES.map(r=>`
+      nav.innerHTML=`<div class="nav-section-label">Menu</div>`+ROUTES.filter(r=>rotaPermitida(r.id)).map(r=>`
         <div class="nav-item ${state.route===r.id?"active":""}" data-nav="${esc(r.id)}">
           <span class="nav-item-icon">${r.icon}</span>${esc(r.label)}
           ${r.id==="lembretes"&&pendentesCount()>0?`<span style="margin-left:auto;background:var(--amber);color:#000;border-radius:20px;font-size:10px;font-weight:700;padding:1px 6px;">${pendentesCount()}</span>`:""}
         </div>`).join("");
       $$(".nav-item[data-nav]",nav).forEach(el=>el.addEventListener("click",()=>navigate(el.getAttribute("data-nav"))));
     }
+    // Bottom nav: filtrar itens permitidos
+    const bottomPermitidos=BOTTOM_NAV.filter(id=>rotaPermitida(id));
     const bn=$("#bottom-nav-items");
     if(bn){
-      bn.innerHTML=BOTTOM_NAV.map(id=>{const r=getRoute(id);return`<div class="bottom-nav-item ${state.route===r.id?"active":""}" data-nav="${esc(r.id)}"><span class="icon">${r.icon}</span><span>${esc(r.label)}</span></div>`;}).join("")+
-        `<div class="bottom-nav-item ${!BOTTOM_NAV.includes(state.route)?"active":""}" id="btn-more"><span class="icon">⋯</span><span>Mais</span></div>`;
+      bn.innerHTML=bottomPermitidos.map(id=>{const r=getRoute(id);return`<div class="bottom-nav-item ${state.route===r.id?"active":""}" data-nav="${esc(r.id)}"><span class="icon">${r.icon}</span><span>${esc(r.label)}</span></div>`;}).join("")+
+        `<div class="bottom-nav-item ${!bottomPermitidos.includes(state.route)?"active":""}" id="btn-more"><span class="icon">⋯</span><span>Mais</span></div>`;
       $$(".bottom-nav-item[data-nav]",bn).forEach(el=>el.addEventListener("click",()=>navigate(el.getAttribute("data-nav"))));
       $("#btn-more")?.addEventListener("click",openMoreDrawer);
     }
     const mg=$("#more-drawer-grid");
     if(mg){
-      mg.innerHTML=ROUTES.filter(r=>!BOTTOM_NAV.includes(r.id)).map(r=>`
+      mg.innerHTML=ROUTES.filter(r=>!BOTTOM_NAV.includes(r.id)&&rotaPermitida(r.id)).map(r=>`
         <div class="more-drawer-item ${state.route===r.id?"active":""}" data-nav="${esc(r.id)}">
           <span class="icon">${r.icon}</span>${esc(r.label)}
           ${r.id==="lembretes"&&pendentesCount()>0?`<br><span style="font-size:10px;color:var(--amber);">${pendentesCount()} pendente${pendentesCount()>1?"s":""}</span>`:""}
@@ -170,12 +190,48 @@
   async function loadResource(resource){
     const apiKey=resource==="anotacoes"?"notas":resource;
     const cacheKey=resource==="anotacoes"?"notas":resource;
-    const items=await DB.list(apiKey);
-    state.cache[cacheKey]=safeArray(items);
+    // Garantir que cache sempre começa como array mesmo em erro
+    if(!Array.isArray(state.cache[cacheKey])) state.cache[cacheKey]=[];
+    try{
+      const items=await DB.list(apiKey);
+      state.cache[cacheKey]=safeArray(items);
+    }catch(e){
+      // 403 = sem permissão, manter cache como [] silenciosamente
+      if(e?.status===403||String(e?.message||"").includes("permiss")){
+        state.cache[cacheKey]=[];
+      } else {
+        console.warn("loadResource erro:",resource,e?.message||e);
+      }
+    }
     return state.cache[cacheKey];
   }
+
   async function preloadAll(){
-    await Promise.allSettled(["clientes","mercadorias","pedidos","rotas","despesas","lembretes","notas"].map(r=>loadResource(r).catch(e=>console.warn(r,e))));
+    const user=DB.getUser();
+    const isAdmin=user?.role==="admin";
+    const perms=user?.permissions||{};
+    // Mapa recurso -> chave de permissão
+    const recursoPermMap={
+      clientes:"clientes", mercadorias:"mercadorias", pedidos:"pedidos",
+      rotas:"rotas", despesas:"despesas", lembretes:"lembretes",
+      notas:"anotacoes",  // recurso da API "notas" → permissão chave "anotacoes"
+    };
+    const todos=["clientes","mercadorias","pedidos","rotas","despesas","lembretes","notas"];
+    // Filtrar só os que o usuário tem permissão de ver
+    const permitidos=todos.filter(r=>{
+      if(isAdmin) return true;
+      const permKey=recursoPermMap[r]||r;
+      if(!perms||Object.keys(perms).length===0) return true; // sem restrições = tudo
+      const rp=perms[permKey];
+      if(rp===false) return false;
+      if(typeof rp==="object"&&rp!==null) return rp.ver!==false;
+      return true;
+    });
+    // Garantir que recursos bloqueados ficam como [] no cache
+    todos.forEach(r=>{
+      if(!permitidos.includes(r)) state.cache[r==="anotacoes"?"notas":r]=[];
+    });
+    await Promise.allSettled(permitidos.map(r=>loadResource(r)));
   }
 
   // Schemas
@@ -2774,7 +2830,23 @@
       e.preventDefault();
       const email=lf.querySelector("[name='email']")?.value?.trim()||"",senha=lf.querySelector("[name='senha']")?.value||"";
       if(!email||!senha) return toast("Informe e-mail e senha.","warning");
-      await runWithUi(async()=>{await DB.login(email,senha);try{await DB.me();}catch{}syncLoginWorkspace();bindShell();renderNav();await preloadAll();renderCurrent();showLembretesPopupIfNeeded();toast("✅ Login realizado!","success");},"Entrando...");
+      await runWithUi(async()=>{
+        await DB.login(email,senha);
+        // Sempre buscar /api/me após login para garantir permissions atualizado
+        try{
+          const meData=await DB.me();
+          // Garantir que permissions está no user salvo
+          const u=DB.getUser();
+          if(u&&!u.permissions){
+            const permsFromMe=meData?.user?.permissions||meData?.permissions||{};
+            DB.setUser({...u,permissions:permsFromMe});
+          }
+        }catch(e){console.warn("me() falhou:",e);}
+        syncLoginWorkspace();bindShell();renderNav();
+        await preloadAll();
+        renderCurrent();showLembretesPopupIfNeeded();
+        toast("✅ Login realizado!","success");
+      },"Entrando...");
     });}
 
     const rf=$("#register-form");
@@ -2789,18 +2861,51 @@
 
   // Init
   async function init(){
-    // Restaurar tema salvo
     try{if(localStorage.getItem("sv_theme")==="light") document.body.classList.add("light-mode");}catch{}
 
     bindAuthForms();
     if(DB.getToken()){
       try{
-        await DB.me(); syncLoginWorkspace(); bindShell(); renderNav();
+        // Buscar /api/me para garantir permissions atualizadas
+        let meOk=false;
+        try{
+          const meData=await DB.me();
+          // me() já chama setUser internamente via db.js
+          // Mas garantir que permissions está mesclado corretamente
+          const u=DB.getUser();
+          if(u){
+            const permsFromServer=meData?.user?.permissions||meData?.permissions;
+            if(permsFromServer!==undefined){
+              DB.setUser({...u, permissions:permsFromServer});
+            }
+          }
+          meOk=true;
+        }catch(meErr){
+          // Se for 401/403 = sessão inválida, deslogar
+          if(meErr?.status===401||meErr?.status===403){
+            DB.clearSession(); syncLoginWorkspace(); return;
+          }
+          // Erro de rede = continuar com dados do localStorage
+          console.warn("me() falhou (rede?), usando dados locais:", meErr?.message);
+        }
+
+        syncLoginWorkspace(); bindShell();
+        renderNav();
         await runWithUi(preloadAll,"Carregando dados...");
         const hash=(location.hash||"#dashboard").replace("#","")||"dashboard";
-        state.route=getRoute(hash).id; renderNav(); renderCurrent();
+        state.route=getRoute(hash).id;
+        renderNav(); renderCurrent();
         showLembretesPopupIfNeeded();
-      }catch(e){console.warn("Sessão inválida:",e);DB.clearSession();syncLoginWorkspace();}
+      }catch(e){
+        if(e?.status===401||e?.status===403){
+          console.warn("Sessão inválida:",e);
+          DB.clearSession(); syncLoginWorkspace();
+        } else {
+          console.warn("Erro de inicialização (não crítico):",e?.message);
+          // Tentar continuar mesmo assim
+          try{syncLoginWorkspace();bindShell();renderNav();renderCurrent();}catch{}
+        }
+      }
     }else{syncLoginWorkspace();}
 
     window.addEventListener("hashchange",()=>{
