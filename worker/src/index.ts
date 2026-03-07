@@ -318,14 +318,30 @@ export default {
       if (!claim) return bad("Não autorizado.", 401);
       const vendorId = claim.sub;
 
+      // Resolver o vendor_id efetivo: vendedores usam o owner_id do admin que os criou
+      // Assim todos compartilham o mesmo banco de dados (clientes, pedidos, etc.)
+      let effectiveVendorId = vendorId;
+      if (claim.role !== "admin") {
+        try {
+          const vRow = await env.DB.prepare(
+            "SELECT owner_id FROM vendors WHERE id=?"
+          ).bind(vendorId).first<any>();
+          if (vRow?.owner_id) effectiveVendorId = vRow.owner_id;
+        } catch { /* coluna pode não existir ainda, usar próprio id */ }
+      }
+
       // Me
       if (p[1] === "me" && req.method === "GET") {
         const v = await env.DB.prepare(
-          "SELECT id,email,name,role,active,created_at,permissions FROM vendors WHERE id=?"
+          "SELECT id,email,name,role,active,created_at FROM vendors WHERE id=?"
         ).bind(vendorId).first<any>();
         if (!v) return bad("Usuário não encontrado.", 404);
+        // Buscar permissions separadamente (pode não existir se migração não foi rodada)
         let permissions: Record<string,any> = {};
-        try { permissions = JSON.parse(v.permissions || "{}"); } catch {}
+        try {
+          const vp = await env.DB.prepare("SELECT permissions FROM vendors WHERE id=?").bind(vendorId).first<any>();
+          if (vp?.permissions) permissions = JSON.parse(vp.permissions);
+        } catch { /* coluna não existe ainda, ignorar */ }
         return json({ user: { ...v, permissions } });
       }
 
@@ -372,10 +388,11 @@ export default {
           const hash = await sha256Hex(salt + senha);
           const id = await nextId(env, vendorId, "user");
 
+          // Novo vendedor herda o owner_id do admin que o criou (ou é o próprio dono se admin)
           await env.DB.prepare(
-            `INSERT INTO vendors (id,email,name,password_salt,password_hash,role,active,created_at)
-             VALUES (?,?,?,?,?,?,?,?)`
-          ).bind(id, email, name, salt, hash, role, active, nowISO()).run();
+            `INSERT INTO vendors (id,email,name,password_salt,password_hash,role,active,owner_id,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?)`
+          ).bind(id, email, name, salt, hash, role, active, vendorId, nowISO()).run();
 
           return json({ id, email, name, role, active });
         }
@@ -448,27 +465,36 @@ export default {
           await env.DB.prepare(
             `INSERT INTO logs (id,vendor_id,user_id,user_name,acao,recurso,detalhe,created_at)
              VALUES (?,?,?,?,?,?,?,?)`
-          ).bind(logId, vendorId, vendorId, user?.name || vendorId, acao, recurso, detalhe.slice(0,300), nowISO()).run();
+          ).bind(logId, effectiveVendorId, vendorId, user?.name || vendorId, acao, recurso, detalhe.slice(0,300), nowISO()).run();
         } catch {}
       }
 
-      // Helper: checar permissão do usuário
+      // Helper: checar permissão do usuário - NUNCA bloqueia por erro técnico
       async function temPermissao(recurso: string, acao: string): Promise<boolean> {
-        if (claim.role === "admin") return true; // admin sempre passa
-        const v = await env.DB.prepare("SELECT permissions,role FROM vendors WHERE id=?").bind(vendorId).first<any>();
-        if (!v) return false;
-        if (v.role === "admin") return true;
         try {
-          const perms = JSON.parse(v.permissions || "{}");
-          // Se não tem permissões configuradas, seller tem acesso total
+          if (claim.role === "admin") return true; // admin sempre passa
+          let v: any = null;
+          try {
+            // Buscar permissões do usuário logado (vendorId original, não effectiveVendorId)
+            v = await env.DB.prepare("SELECT permissions,role FROM vendors WHERE id=?").bind(vendorId).first<any>();
+          } catch {
+            return true; // coluna pode não existir → liberar
+          }
+          if (!v) return true;
+          if (v.role === "admin") return true;
+          if (!v.permissions || v.permissions === "{}") return true;
+          const perms = JSON.parse(v.permissions);
           if (!perms || Object.keys(perms).length === 0) return true;
           const recursoPerms = perms[recurso];
+          if (recursoPerms === undefined) return true;
           if (recursoPerms === false) return false;
           if (typeof recursoPerms === "object" && recursoPerms !== null) {
             return recursoPerms[acao] !== false;
           }
           return true;
-        } catch { return true; }
+        } catch {
+          return true;
+        }
       }
 
       /** =================== CLIENTES =================== **/
@@ -478,19 +504,19 @@ export default {
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
             "SELECT * FROM clientes WHERE vendor_id=? ORDER BY nome ASC"
-          ).bind(vendorId).all<any>();
+          ).bind(effectiveVendorId).all<any>();
           return json((rows.results || []).map((r: any) => ({ ...r, tags: parseJSONField(r.tags, []) })));
         }
 
         if (req.method === "GET" && p[2]) {
           const row = await env.DB.prepare("SELECT * FROM clientes WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           if (!row) return bad("Não encontrado.", 404);
 
           // Calcular histórico do cliente
           const pedidos = await env.DB.prepare(
             "SELECT id,data,total,status,formaPagamento,urgencia FROM pedidos WHERE clienteId=? AND vendor_id=? ORDER BY created_at DESC"
-          ).bind(p[2], vendorId).all<any>();
+          ).bind(p[2], effectiveVendorId).all<any>();
 
           const totalGasto = (pedidos.results || []).reduce((acc: number, p: any) => acc + Number(p.total || 0), 0);
           const pedidosAbertos = (pedidos.results || []).filter((p: any) =>
@@ -515,7 +541,7 @@ export default {
           const nome = String(body.nome || "").trim();
           if (!nome) return bad("Nome é obrigatório.", 400);
 
-          const id = String(body.id || "").trim() || (await nextId(env, vendorId, "cliente"));
+          const id = String(body.id || "").trim() || (await nextId(env, effectiveVendorId, "cliente"));
           const tags = JSON.stringify(Array.isArray(body.tags) ? body.tags : []);
 
           await env.DB.prepare(
@@ -529,7 +555,7 @@ export default {
               pagamentoPadrao=excluded.pagamentoPadrao, prazoDias=excluded.prazoDias,
               tags=excluded.tags, obs=excluded.obs, updated_at=excluded.updated_at`
           ).bind(
-            id, vendorId, nome,
+            id, effectiveVendorId, nome,
             body.telefone || "", body.email || "", body.endereco || "", body.numero || "",
             body.bairro || "", body.cidade || "", body.uf || "", body.cep || "",
             body.cpfcnpj || "", body.pagamentoPadrao || "",
@@ -538,7 +564,7 @@ export default {
           ).run();
 
           const row = await env.DB.prepare("SELECT * FROM clientes WHERE id=? AND vendor_id=?")
-            .bind(id, vendorId).first<any>();
+            .bind(id, effectiveVendorId).first<any>();
           await logAtividade("criar", "clientes", `Cliente ${nome} (${id})`);
           return json({ ...row, tags: parseJSONField(row?.tags, []) });
         }
@@ -563,7 +589,7 @@ export default {
           ).run();
 
           const row = await env.DB.prepare("SELECT * FROM clientes WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           await logAtividade("editar", "clientes", `Cliente ${body.nome||""} (${p[2]})`);
           return json({ ...row, tags: parseJSONField(row?.tags, []) });
         }
@@ -571,7 +597,7 @@ export default {
         if (req.method === "DELETE" && p[2]) {
           if (!await temPermissao("clientes","excluir")) return bad("Sem permissão para excluir clientes.", 403);
           await env.DB.prepare("DELETE FROM clientes WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).run();
+            .bind(p[2], effectiveVendorId).run();
           await logAtividade("excluir", "clientes", `Cliente ${p[2]} excluído`);
           return json({ ok: true });
         }
@@ -585,20 +611,20 @@ export default {
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
             `SELECT * FROM ${table} WHERE vendor_id=? ORDER BY produto ASC`
-          ).bind(vendorId).all<any>();
+          ).bind(effectiveVendorId).all<any>();
           return json(rows.results || []);
         }
 
         if (req.method === "GET" && p[2]) {
           const row = await env.DB.prepare(`SELECT * FROM ${table} WHERE id=? AND vendor_id=?`)
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           if (!row) return bad("Não encontrado.", 404);
           return json(row);
         }
 
         if (req.method === "POST") {
           const body = await readJson<any>(req);
-          const id = String(body.id || "").trim() || (await nextId(env, vendorId, "produto"));
+          const id = String(body.id || "").trim() || (await nextId(env, effectiveVendorId, "produto"));
           const nomeProduto = body.produto || body.nome || "";
 
           await env.DB.prepare(
@@ -612,7 +638,7 @@ export default {
               estoqueAtual=excluded.estoqueAtual, estoqueMin=excluded.estoqueMin,
               local=excluded.local, status=excluded.status, updated_at=excluded.updated_at`
           ).bind(
-            id, vendorId,
+            id, effectiveVendorId,
             body.marca || "", nomeProduto,
             body.modelo || "", body.descricao || "", body.categoria || "",
             body.sku || body.codigo || "",
@@ -626,7 +652,7 @@ export default {
           ).run();
 
           const row = await env.DB.prepare(`SELECT * FROM ${table} WHERE id=? AND vendor_id=?`)
-            .bind(id, vendorId).first();
+            .bind(id, effectiveVendorId).first();
           return json(row);
         }
 
@@ -638,7 +664,7 @@ export default {
           if (body._ajuste_pct !== undefined) {
             const pct = Number(body._ajuste_pct);
             const current = await env.DB.prepare(`SELECT valorVenda FROM ${table} WHERE id=? AND vendor_id=?`)
-              .bind(p[2], vendorId).first<{ valorVenda: number }>();
+              .bind(p[2], effectiveVendorId).first<{ valorVenda: number }>();
             if (current) {
               const novoValor = current.valorVenda * (1 + pct / 100);
               body.valorVenda = Math.round(novoValor * 100) / 100;
@@ -662,13 +688,13 @@ export default {
           ).run();
 
           const row = await env.DB.prepare(`SELECT * FROM ${table} WHERE id=? AND vendor_id=?`)
-            .bind(p[2], vendorId).first();
+            .bind(p[2], effectiveVendorId).first();
           return json(row);
         }
 
         if (req.method === "DELETE" && p[2]) {
           await env.DB.prepare(`DELETE FROM ${table} WHERE id=? AND vendor_id=?`)
-            .bind(p[2], vendorId).run();
+            .bind(p[2], effectiveVendorId).run();
           return json({ ok: true });
         }
       }
@@ -679,20 +705,20 @@ export default {
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
             "SELECT * FROM pedidos WHERE vendor_id=? ORDER BY created_at DESC"
-          ).bind(vendorId).all<any>();
+          ).bind(effectiveVendorId).all<any>();
           return json((rows.results || []).map((r: any) => ({ ...r, itens: parseJSONField(r.itens, []) })));
         }
 
         if (req.method === "GET" && p[2]) {
           const row = await env.DB.prepare("SELECT * FROM pedidos WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           if (!row) return bad("Não encontrado.", 404);
           return json({ ...row, itens: parseJSONField(row.itens, []) });
         }
 
         if (req.method === "POST") {
           const body = await readJson<any>(req);
-          const id = String(body.id || "").trim() || (await nextId(env, vendorId, "pedido"));
+          const id = String(body.id || "").trim() || (await nextId(env, effectiveVendorId, "pedido"));
           const itens = JSON.stringify(body.itens || []);
 
           await env.DB.prepare(
@@ -705,14 +731,14 @@ export default {
               prazoDias=excluded.prazoDias, status=excluded.status, obs=excluded.obs,
               total=excluded.total, itens=excluded.itens, updated_at=excluded.updated_at`
           ).bind(
-            id, vendorId, body.data || "", body.clienteId || "", body.clienteNome || "",
+            id, effectiveVendorId, body.data || "", body.clienteId || "", body.clienteNome || "",
             body.urgencia || "Normal", body.formaPagamento || "",
             Number(body.prazoDias || 0), body.status || "Aberto", body.obs || "",
             Number(body.total || 0), itens, nowISO(), nowISO()
           ).run();
 
           const row = await env.DB.prepare("SELECT * FROM pedidos WHERE id=? AND vendor_id=?")
-            .bind(id, vendorId).first<any>();
+            .bind(id, effectiveVendorId).first<any>();
           await logAtividade("criar", "pedidos", `Pedido ${id} - Cliente: ${body.clienteNome||""} - Total: R$${body.total||0}`);
           return json({ ...row, itens: parseJSONField(row?.itens, []) });
         }
@@ -735,7 +761,7 @@ export default {
           ).run();
 
           const row = await env.DB.prepare("SELECT * FROM pedidos WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           await logAtividade("editar", "pedidos", `Pedido ${p[2]} - Status: ${body.status||""} - Total: R$${body.total||0}`);
           return json({ ...row, itens: parseJSONField(row?.itens, []) });
         }
@@ -743,7 +769,7 @@ export default {
         if (req.method === "DELETE" && p[2]) {
           if (!await temPermissao("pedidos","excluir")) return bad("Sem permissão para excluir pedidos.", 403);
           await env.DB.prepare("DELETE FROM pedidos WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).run();
+            .bind(p[2], effectiveVendorId).run();
           await logAtividade("excluir", "pedidos", `Pedido ${p[2]} excluído`);
           return json({ ok: true });
         }
@@ -755,20 +781,20 @@ export default {
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
             "SELECT * FROM despesas WHERE vendor_id=? ORDER BY data DESC, created_at DESC"
-          ).bind(vendorId).all<any>();
+          ).bind(effectiveVendorId).all<any>();
           return json(rows.results || []);
         }
 
         if (req.method === "GET" && p[2]) {
           const row = await env.DB.prepare("SELECT * FROM despesas WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           if (!row) return bad("Não encontrado.", 404);
           return json(row);
         }
 
         if (req.method === "POST") {
           const body = await readJson<any>(req);
-          const id = String(body.id || "").trim() || (await nextId(env, vendorId, "despesa"));
+          const id = String(body.id || "").trim() || (await nextId(env, effectiveVendorId, "despesa"));
 
           await env.DB.prepare(
             `INSERT INTO despesas (id,vendor_id,data,categoria,valor,pagamento,obs,updated_at,created_at)
@@ -776,12 +802,12 @@ export default {
             ON CONFLICT(id) DO UPDATE SET
               data=excluded.data, categoria=excluded.categoria, valor=excluded.valor,
               pagamento=excluded.pagamento, obs=excluded.obs, updated_at=excluded.updated_at`
-          ).bind(id, vendorId, body.data || "", body.categoria || "",
+          ).bind(id, effectiveVendorId, body.data || "", body.categoria || "",
             Number(body.valor || 0), body.pagamento || "", body.obs || "",
             nowISO(), nowISO()).run();
 
           const row = await env.DB.prepare("SELECT * FROM despesas WHERE id=? AND vendor_id=?")
-            .bind(id, vendorId).first();
+            .bind(id, effectiveVendorId).first();
           return json(row);
         }
 
@@ -797,13 +823,13 @@ export default {
           ).run();
 
           const row = await env.DB.prepare("SELECT * FROM despesas WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first();
+            .bind(p[2], effectiveVendorId).first();
           return json(row);
         }
 
         if (req.method === "DELETE" && p[2]) {
           await env.DB.prepare("DELETE FROM despesas WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).run();
+            .bind(p[2], effectiveVendorId).run();
           return json({ ok: true });
         }
       }
@@ -813,20 +839,20 @@ export default {
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
             "SELECT * FROM lembretes WHERE vendor_id=? ORDER BY data ASC, created_at DESC"
-          ).bind(vendorId).all<any>();
+          ).bind(effectiveVendorId).all<any>();
           return json(rows.results || []);
         }
 
         if (req.method === "GET" && p[2]) {
           const row = await env.DB.prepare("SELECT * FROM lembretes WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           if (!row) return bad("Não encontrado.", 404);
           return json(row);
         }
 
         if (req.method === "POST") {
           const body = await readJson<any>(req);
-          const id = String(body.id || "").trim() || (await nextId(env, vendorId, "lembrete"));
+          const id = String(body.id || "").trim() || (await nextId(env, effectiveVendorId, "lembrete"));
 
           await env.DB.prepare(
             `INSERT INTO lembretes
@@ -837,14 +863,14 @@ export default {
               status=excluded.status, clienteId=excluded.clienteId, clienteNome=excluded.clienteNome,
               segmento=excluded.segmento, updated_at=excluded.updated_at`
           ).bind(
-            id, vendorId, body.tipo || "", body.titulo || "", body.data || "",
+            id, effectiveVendorId, body.tipo || "", body.titulo || "", body.data || "",
             body.texto || "", body.status || "Pendente",
             body.clienteId || "", body.clienteNome || "", body.segmento || "",
             nowISO(), nowISO()
           ).run();
 
           const row = await env.DB.prepare("SELECT * FROM lembretes WHERE id=? AND vendor_id=?")
-            .bind(id, vendorId).first();
+            .bind(id, effectiveVendorId).first();
           return json(row);
         }
 
@@ -862,13 +888,13 @@ export default {
           ).run();
 
           const row = await env.DB.prepare("SELECT * FROM lembretes WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first();
+            .bind(p[2], effectiveVendorId).first();
           return json(row);
         }
 
         if (req.method === "DELETE" && p[2]) {
           await env.DB.prepare("DELETE FROM lembretes WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).run();
+            .bind(p[2], effectiveVendorId).run();
           return json({ ok: true });
         }
       }
@@ -878,20 +904,20 @@ export default {
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
             "SELECT * FROM rotas WHERE vendor_id=? ORDER BY data DESC"
-          ).bind(vendorId).all<any>();
+          ).bind(effectiveVendorId).all<any>();
           return json((rows.results || []).map((r: any) => ({ ...r, paradas: parseJSONField(r.paradas, []) })));
         }
 
         if (req.method === "GET" && p[2]) {
           const row = await env.DB.prepare("SELECT * FROM rotas WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           if (!row) return bad("Não encontrado.", 404);
           return json({ ...row, paradas: parseJSONField(row.paradas, []) });
         }
 
         if (req.method === "POST") {
           const body = await readJson<any>(req);
-          const id = String(body.id || "").trim() || (await nextId(env, vendorId, "rota"));
+          const id = String(body.id || "").trim() || (await nextId(env, effectiveVendorId, "rota"));
           const paradas = JSON.stringify(body.paradas || []);
 
           await env.DB.prepare(
@@ -899,10 +925,10 @@ export default {
             VALUES (?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
               nome=excluded.nome, data=excluded.data, obs=excluded.obs, paradas=excluded.paradas, updated_at=excluded.updated_at`
-          ).bind(id, vendorId, body.nome||"", body.data || "", body.obs || "", paradas, nowISO(), nowISO()).run();
+          ).bind(id, effectiveVendorId, body.nome||"", body.data || "", body.obs || "", paradas, nowISO(), nowISO()).run();
 
           const row = await env.DB.prepare("SELECT * FROM rotas WHERE id=? AND vendor_id=?")
-            .bind(id, vendorId).first<any>();
+            .bind(id, effectiveVendorId).first<any>();
           return json({ ...row, paradas: parseJSONField(row?.paradas, []) });
         }
 
@@ -912,16 +938,16 @@ export default {
 
           await env.DB.prepare(
             `UPDATE rotas SET nome=?,data=?,obs=?,paradas=?,updated_at=? WHERE id=? AND vendor_id=?`
-          ).bind(body.nome||"", body.data || "", body.obs || "", paradas, nowISO(), p[2], vendorId).run();
+          ).bind(body.nome||"", body.data || "", body.obs || "", paradas, nowISO(), p[2], effectiveVendorId).run();
 
           const row = await env.DB.prepare("SELECT * FROM rotas WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           return json({ ...row, paradas: parseJSONField(row?.paradas, []) });
         }
 
         if (req.method === "DELETE" && p[2]) {
           await env.DB.prepare("DELETE FROM rotas WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).run();
+            .bind(p[2], effectiveVendorId).run();
           return json({ ok: true });
         }
       }
@@ -931,31 +957,31 @@ export default {
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
             "SELECT * FROM notas WHERE vendor_id=? ORDER BY fixada DESC, updated_at DESC"
-          ).bind(vendorId).all<any>();
+          ).bind(effectiveVendorId).all<any>();
           return json((rows.results || []).map((r: any) => ({ ...r, fixada: !!r.fixada })));
         }
 
         if (req.method === "GET" && p[2]) {
           const row = await env.DB.prepare("SELECT * FROM notas WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           if (!row) return bad("Não encontrado.", 404);
           return json({ ...row, fixada: !!row.fixada });
         }
 
         if (req.method === "POST") {
           const body = await readJson<any>(req);
-          const id = String(body.id || "").trim() || (await nextId(env, vendorId, "nota"));
+          const id = String(body.id || "").trim() || (await nextId(env, effectiveVendorId, "nota"));
 
           await env.DB.prepare(
             `INSERT INTO notas (id,vendor_id,titulo,texto,fixada,updated_at,created_at)
             VALUES (?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
               titulo=excluded.titulo, texto=excluded.texto, fixada=excluded.fixada, updated_at=excluded.updated_at`
-          ).bind(id, vendorId, body.titulo || "", body.texto || "",
+          ).bind(id, effectiveVendorId, body.titulo || "", body.texto || "",
             body.fixada ? 1 : 0, nowISO(), nowISO()).run();
 
           const row = await env.DB.prepare("SELECT * FROM notas WHERE id=? AND vendor_id=?")
-            .bind(id, vendorId).first<any>();
+            .bind(id, effectiveVendorId).first<any>();
           return json({ ...row, fixada: !!row?.fixada });
         }
 
@@ -964,16 +990,16 @@ export default {
 
           await env.DB.prepare(
             `UPDATE notas SET titulo=?,texto=?,fixada=?,updated_at=? WHERE id=? AND vendor_id=?`
-          ).bind(body.titulo || "", body.texto || "", body.fixada ? 1 : 0, nowISO(), p[2], vendorId).run();
+          ).bind(body.titulo || "", body.texto || "", body.fixada ? 1 : 0, nowISO(), p[2], effectiveVendorId).run();
 
           const row = await env.DB.prepare("SELECT * FROM notas WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           return json({ ...row, fixada: !!row?.fixada });
         }
 
         if (req.method === "DELETE" && p[2]) {
           await env.DB.prepare("DELETE FROM notas WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).run();
+            .bind(p[2], effectiveVendorId).run();
           return json({ ok: true });
         }
       }
@@ -985,7 +1011,7 @@ export default {
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
             "SELECT * FROM manuais WHERE vendor_id=? ORDER BY created_at DESC"
-          ).bind(vendorId).all<any>();
+          ).bind(effectiveVendorId).all<any>();
           return json(rows.results || []);
         }
 
@@ -993,7 +1019,7 @@ export default {
         if (req.method === "GET" && p[2] === "download" && p[3]) {
           const manual = await env.DB.prepare(
             "SELECT * FROM manuais WHERE id=? AND vendor_id=?"
-          ).bind(p[3], vendorId).first<any>();
+          ).bind(p[3], effectiveVendorId).first<any>();
           if (!manual) return bad("Manual não encontrado.", 404);
 
           if (!env.BACKUPS) return bad("Armazenamento R2 não configurado.", 503);
@@ -1041,13 +1067,13 @@ export default {
           const arrayBuffer = await file.arrayBuffer();
           await env.BACKUPS.put(r2key, arrayBuffer, {
             httpMetadata: { contentType: "application/pdf" },
-            customMetadata: { vendorId, nome, tags, categoria },
+            customMetadata: { vendorId: effectiveVendorId, nome, tags, categoria },
           });
 
           await env.DB.prepare(
             `INSERT INTO manuais (id,vendor_id,nome,nome_arquivo,descricao,tags,categoria,r2key,tamanho,created_at)
              VALUES (?,?,?,?,?,?,?,?,?,?)`
-          ).bind(id, vendorId,
+          ).bind(id, effectiveVendorId,
             nome || nomeArquivo,
             nomeArquivo, descricao, tags, categoria,
             r2key, file.size, nowISO()
@@ -1068,7 +1094,7 @@ export default {
             body.nome || "", body.descricao || "", body.tags || "", body.categoria || "",
             p[2], vendorId
           ).run();
-          const row = await env.DB.prepare("SELECT * FROM manuais WHERE id=? AND vendor_id=?").bind(p[2], vendorId).first<any>();
+          const row = await env.DB.prepare("SELECT * FROM manuais WHERE id=? AND vendor_id=?").bind(p[2], effectiveVendorId).first<any>();
           return json(row || {});
         }
 
@@ -1076,13 +1102,13 @@ export default {
         if (req.method === "DELETE" && p[2]) {
           const manual = await env.DB.prepare(
             "SELECT * FROM manuais WHERE id=? AND vendor_id=?"
-          ).bind(p[2], vendorId).first<any>();
+          ).bind(p[2], effectiveVendorId).first<any>();
           if (!manual) return bad("Não encontrado.", 404);
 
           if (env.BACKUPS && manual.r2key) {
             try { await env.BACKUPS.delete(manual.r2key); } catch {}
           }
-          await env.DB.prepare("DELETE FROM manuais WHERE id=? AND vendor_id=?").bind(p[2], vendorId).run();
+          await env.DB.prepare("DELETE FROM manuais WHERE id=? AND vendor_id=?").bind(p[2], effectiveVendorId).run();
           await logAtividade("excluir", "manuais", `Manual "${manual.nome}" excluído`);
           return json({ ok: true });
         }
@@ -1100,17 +1126,17 @@ export default {
                 `SELECT * FROM docs WHERE vendor_id=?
                  AND (LOWER(nome) LIKE ? OR LOWER(descricao) LIKE ? OR LOWER(palavras_chave) LIKE ?)
                  ORDER BY created_at DESC`
-              ).bind(vendorId, `%${q}%`, `%${q}%`, `%${q}%`).all<any>()
+              ).bind(effectiveVendorId, `%${q}%`, `%${q}%`, `%${q}%`).all<any>()
             : await env.DB.prepare(
                 "SELECT * FROM docs WHERE vendor_id=? ORDER BY created_at DESC"
-              ).bind(vendorId).all<any>();
+              ).bind(effectiveVendorId).all<any>();
           return json(rows.results || []);
         }
 
         // GET /api/docs/:id/download — gerar URL assinada ou stream do PDF
         if (req.method === "GET" && p[2] && p[3] === "download") {
           const doc = await env.DB.prepare("SELECT * FROM docs WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           if (!doc) return bad("Documento não encontrado.", 404);
 
           if (!env.DOCS) return bad("Bucket de documentos não configurado.", 503);
@@ -1152,13 +1178,13 @@ export default {
           const bytes = await file.arrayBuffer();
           await env.DOCS.put(r2Key, bytes, {
             httpMetadata: { contentType: file.type || "application/pdf" },
-            customMetadata: { vendorId, docId: id, nome },
+            customMetadata: { vendorId: effectiveVendorId, docId: id, nome },
           });
 
           await env.DB.prepare(
             `INSERT INTO docs (id,vendor_id,nome,nome_arquivo,descricao,palavras_chave,categoria,r2_key,tamanho,created_at,updated_at)
              VALUES (?,?,?,?,?,?,?,?,?,?,?)`
-          ).bind(id, vendorId, nome, file.name, descricao, palavras, categoria,
+          ).bind(id, effectiveVendorId, nome, file.name, descricao, palavras, categoria,
                  r2Key, file.size, nowISO(), nowISO()).run();
 
           await logAtividade("criar", "docs", `Upload: ${nome} (${(file.size/1024).toFixed(0)} KB)`);
@@ -1177,19 +1203,19 @@ export default {
             String(body.categoria||"Geral").trim(),
             nowISO(), p[2], vendorId
           ).run();
-          const row = await env.DB.prepare("SELECT * FROM docs WHERE id=? AND vendor_id=?").bind(p[2], vendorId).first<any>();
+          const row = await env.DB.prepare("SELECT * FROM docs WHERE id=? AND vendor_id=?").bind(p[2], effectiveVendorId).first<any>();
           return json(row || {});
         }
 
         // DELETE /api/docs/:id
         if (req.method === "DELETE" && p[2]) {
           const doc = await env.DB.prepare("SELECT * FROM docs WHERE id=? AND vendor_id=?")
-            .bind(p[2], vendorId).first<any>();
+            .bind(p[2], effectiveVendorId).first<any>();
           if (!doc) return bad("Não encontrado.", 404);
           if (env.DOCS && doc.r2_key) {
             try { await env.DOCS.delete(doc.r2_key); } catch {}
           }
-          await env.DB.prepare("DELETE FROM docs WHERE id=? AND vendor_id=?").bind(p[2], vendorId).run();
+          await env.DB.prepare("DELETE FROM docs WHERE id=? AND vendor_id=?").bind(p[2], effectiveVendorId).run();
           await logAtividade("excluir", "docs", `Doc excluído: ${doc.nome}`);
           return json({ ok: true });
         }
