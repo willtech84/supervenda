@@ -321,15 +321,11 @@ export default {
       // Me
       if (p[1] === "me" && req.method === "GET") {
         const v = await env.DB.prepare(
-          "SELECT id,email,name,role,active,created_at FROM vendors WHERE id=?"
+          "SELECT id,email,name,role,active,created_at,permissions FROM vendors WHERE id=?"
         ).bind(vendorId).first<any>();
         if (!v) return bad("Usuário não encontrado.", 404);
-        // Buscar permissions separadamente (pode não existir se migração não foi rodada)
         let permissions: Record<string,any> = {};
-        try {
-          const vp = await env.DB.prepare("SELECT permissions FROM vendors WHERE id=?").bind(vendorId).first<any>();
-          if (vp?.permissions) permissions = JSON.parse(vp.permissions);
-        } catch { /* coluna não existe ainda, ignorar */ }
+        try { permissions = JSON.parse(v.permissions || "{}"); } catch {}
         return json({ user: { ...v, permissions } });
       }
 
@@ -456,32 +452,23 @@ export default {
         } catch {}
       }
 
-      // Helper: checar permissão do usuário - NUNCA bloqueia por erro técnico
+      // Helper: checar permissão do usuário
       async function temPermissao(recurso: string, acao: string): Promise<boolean> {
+        if (claim.role === "admin") return true; // admin sempre passa
+        const v = await env.DB.prepare("SELECT permissions,role FROM vendors WHERE id=?").bind(vendorId).first<any>();
+        if (!v) return false;
+        if (v.role === "admin") return true;
         try {
-          if (claim.role === "admin") return true; // admin sempre passa
-          let v: any = null;
-          try {
-            v = await env.DB.prepare("SELECT permissions,role FROM vendors WHERE id=?").bind(vendorId).first<any>();
-          } catch {
-            // Coluna pode não existir (migração não rodada) → liberar acesso
-            return true;
-          }
-          if (!v) return true; // usuário não encontrado → não bloquear (já está autenticado)
-          if (v.role === "admin") return true;
-          if (!v.permissions || v.permissions === "{}") return true; // sem restrições
-          const perms = JSON.parse(v.permissions);
+          const perms = JSON.parse(v.permissions || "{}");
+          // Se não tem permissões configuradas, seller tem acesso total
           if (!perms || Object.keys(perms).length === 0) return true;
           const recursoPerms = perms[recurso];
-          if (recursoPerms === undefined) return true; // recurso não configurado = permitido
           if (recursoPerms === false) return false;
           if (typeof recursoPerms === "object" && recursoPerms !== null) {
             return recursoPerms[acao] !== false;
           }
           return true;
-        } catch {
-          return true; // em caso de qualquer erro, não bloquear
-        }
+        } catch { return true; }
       }
 
       /** =================== CLIENTES =================== **/
