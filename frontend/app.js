@@ -648,14 +648,15 @@
           <button id="sv-refresh-btn" class="btn btn-secondary btn-icon" title="Atualizar">↻</button>
         </div>
         ${resource==="mercadorias"?`
-        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+          <button id="sv-scan-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.3);color:var(--green);">📷 Ler código de barras</button>
           <button id="sv-export-btn" class="btn btn-secondary" style="font-size:12px;">📤 Exportar CSV</button>
           <label id="sv-import-label" class="btn btn-secondary" style="font-size:12px;cursor:pointer;margin:0;">
             📥 Importar CSV/Excel
             <input type="file" id="sv-import-file" accept=".csv,.xlsx,.xls" style="display:none;"/>
           </label>
-          <span style="font-size:11px;color:var(--muted);align-self:center;">Colunas esperadas: nome, marca, categoria, codigo, valor_compra, valor_venda, estoque, estoqueMin</span>
         </div>`:""}
+        <div id="sv-scanner-wrap"></div>
         <div id="sv-count" style="margin-top:6px;font-size:12px;color:var(--muted);">${getFiltered().length} registro${getFiltered().length!==1?"s":""}</div>
       </div>
       <div id="sv-form-wrap"></div>
@@ -752,6 +753,11 @@
           toast("Para Excel, salve como CSV (separado por ponto-e-vírgula) e importe novamente. O CSV é compatível com Excel.","warning",6000);
         }
       });
+    }
+
+    // Scanner de código de barras via câmera
+    if(resource==="mercadorias"){
+      $("#sv-scan-btn")?.addEventListener("click",()=>abrirScanner(root,rawItems,resource));
     }
 
     renderList(resource,getFiltered(),rawItems);
@@ -1799,6 +1805,347 @@
     $("#rel-ate")?.addEventListener("change",e=>{state._relFiltro.ate=e.target.value;});
     $("#rel-pdf")?.addEventListener("click",gerarPDF);
   }
+
+  // ─── Scanner de Câmera: Código de Barras + OCR via Claude ───────────────────
+  async function abrirScanner(root, rawItems, resource){
+    const wrap=$("#sv-scanner-wrap"); if(!wrap) return;
+    if(wrap.querySelector("#sv-scanner-modal")){wrap.innerHTML="";return;}
+
+    // ── modos: "barcode" = leitura contínua | "ocr" = foto + Claude AI ──
+    let modoAtual="barcode";
+    let stream=null, rafId=null, detector=null, ultimoCodigo="", debounceTimer=null;
+
+    wrap.innerHTML=`
+      <div id="sv-scanner-modal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.95);
+        display:flex;flex-direction:column;align-items:center;overflow:hidden;">
+
+        <!-- Header -->
+        <div style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:rgba(0,0,0,.7);flex-shrink:0;">
+          <div>
+            <div style="font-size:15px;font-weight:700;color:#fff;">📷 Buscar produto pela câmera</div>
+            <div id="sv-scan-status" style="font-size:11px;color:rgba(255,255,255,.5);margin-top:2px;">Iniciando câmera...</div>
+          </div>
+          <button id="sv-scan-close" style="background:rgba(255,255,255,.1);border:none;color:#fff;width:36px;height:36px;border-radius:50%;font-size:18px;cursor:pointer;">✕</button>
+        </div>
+
+        <!-- Tabs de modo -->
+        <div style="display:flex;width:100%;max-width:480px;background:rgba(255,255,255,.06);flex-shrink:0;">
+          <button id="tab-barcode" style="flex:1;padding:10px;border:none;background:rgba(0,230,118,.15);color:#00e676;font-family:var(--font);font-size:13px;font-weight:700;border-bottom:2px solid #00e676;cursor:pointer;">
+            ▌▌▌ Código de barras
+          </button>
+          <button id="tab-ocr" style="flex:1;padding:10px;border:none;background:transparent;color:rgba(255,255,255,.5);font-family:var(--font);font-size:13px;font-weight:600;border-bottom:2px solid transparent;cursor:pointer;">
+            🔤 Ler texto / código
+          </button>
+        </div>
+
+        <!-- Visor -->
+        <div style="position:relative;width:100%;max-width:480px;flex:1;overflow:hidden;background:#000;min-height:200px;">
+          <video id="sv-scan-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;display:block;"></video>
+
+          <!-- Mira modo barcode -->
+          <div id="sv-mira-barcode" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;">
+            <div style="position:relative;width:75%;max-width:300px;height:100px;border:2px solid rgba(0,230,118,.7);border-radius:10px;box-shadow:0 0 0 2000px rgba(0,0,0,.35);">
+              <div style="position:absolute;top:-2px;left:-2px;width:18px;height:18px;border-top:3px solid #00e676;border-left:3px solid #00e676;border-radius:3px 0 0 0;"></div>
+              <div style="position:absolute;top:-2px;right:-2px;width:18px;height:18px;border-top:3px solid #00e676;border-right:3px solid #00e676;border-radius:0 3px 0 0;"></div>
+              <div style="position:absolute;bottom:-2px;left:-2px;width:18px;height:18px;border-bottom:3px solid #00e676;border-left:3px solid #00e676;border-radius:0 0 0 3px;"></div>
+              <div style="position:absolute;bottom:-2px;right:-2px;width:18px;height:18px;border-bottom:3px solid #00e676;border-right:3px solid #00e676;border-radius:0 0 3px 0;"></div>
+              <div style="position:absolute;left:6px;right:6px;height:2px;background:rgba(0,230,118,.8);top:50%;border-radius:2px;animation:scanLine 2s linear infinite;"></div>
+              <div style="position:absolute;bottom:-28px;width:100%;text-align:center;font-size:11px;color:rgba(255,255,255,.5);">Alinhe o código de barras aqui</div>
+            </div>
+          </div>
+
+          <!-- Mira modo OCR -->
+          <div id="sv-mira-ocr" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;display:none;">
+            <div style="position:relative;width:85%;max-width:340px;height:160px;border:2px dashed rgba(255,200,0,.7);border-radius:10px;box-shadow:0 0 0 2000px rgba(0,0,0,.35);">
+              <div style="position:absolute;bottom:-28px;width:100%;text-align:center;font-size:11px;color:rgba(255,200,0,.7);">Enquadre a etiqueta ou código do produto</div>
+            </div>
+          </div>
+
+          <!-- Botão tirar foto (só modo OCR) -->
+          <div id="sv-foto-btn-wrap" style="display:none;position:absolute;bottom:16px;left:50%;transform:translateX(-50%);">
+            <button id="sv-foto-btn" style="width:64px;height:64px;border-radius:50%;background:#fff;border:4px solid rgba(255,255,255,.4);cursor:pointer;font-size:28px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 20px rgba(0,0,0,.5);">📸</button>
+          </div>
+
+          <canvas id="sv-scan-canvas" style="display:none;"></canvas>
+        </div>
+
+        <!-- Resultado + manual -->
+        <div style="width:100%;max-width:480px;padding:14px 18px;flex-shrink:0;overflow-y:auto;max-height:45vh;">
+          <div id="sv-scan-result" style="display:none;border-radius:12px;padding:14px;margin-bottom:10px;"></div>
+
+          <div style="display:flex;gap:8px;">
+            <input id="sv-scan-manual" type="text" placeholder="Buscar por código ou nome..." autocomplete="off"
+              style="flex:1;padding:11px 14px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);border-radius:10px;color:#fff;font-family:var(--font);font-size:14px;"/>
+            <button id="sv-scan-manual-btn" style="padding:11px 16px;background:var(--green);border:none;border-radius:10px;color:#000;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer;">Buscar</button>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:rgba(255,255,255,.35);text-align:center;" id="sv-scan-hint">
+            Modo barras: leitura automática contínua
+          </div>
+        </div>
+      </div>
+      <style>@keyframes scanLine{0%{top:10%}50%{top:88%}100%{top:10%}}</style>`;
+
+    const video=document.getElementById("sv-scan-video");
+    const canvas=document.getElementById("sv-scan-canvas");
+    const status=document.getElementById("sv-scan-status");
+    const resultDiv=document.getElementById("sv-scan-result");
+    const hint=document.getElementById("sv-scan-hint");
+
+    // ── Fechar ──────────────────────────────────────────────────────────────
+    function fecharScanner(){
+      if(rafId) cancelAnimationFrame(rafId);
+      if(stream) stream.getTracks().forEach(t=>t.stop());
+      wrap.innerHTML="";
+    }
+    document.getElementById("sv-scan-close")?.addEventListener("click",fecharScanner);
+
+    // ── Buscar produto (por código exato ou texto parcial) ─────────────────
+    function exibirResultado(codigo, encontrados){
+      resultDiv.style.display="block";
+      try{ navigator.vibrate?.([80]); }catch{}
+
+      if(encontrados.length===1){
+        const m=encontrados[0];
+        const nome=m.nome||m.produto||"";
+        const preco=Number(m.valorVenda||m.valor_venda||0);
+        resultDiv.style.background="rgba(0,230,118,.1)";
+        resultDiv.style.border="1px solid rgba(0,230,118,.3)";
+        resultDiv.innerHTML=`
+          <div style="font-size:11px;color:rgba(255,255,255,.5);margin-bottom:6px;">✅ Produto encontrado</div>
+          <div style="font-size:15px;font-weight:700;color:#fff;">${esc(nome)}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,.5);margin-top:2px;">Código: ${esc(m.codigo||m.sku||codigo)}</div>
+          <div style="font-size:16px;font-weight:700;color:#00e676;margin-top:6px;">R$ ${preco.toFixed(2).replace(".",",")}</div>
+          <button id="sv-r-editar" style="margin-top:10px;width:100%;padding:12px;background:#00e676;border:none;border-radius:10px;color:#000;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;">✏️ Editar produto / preço</button>`;
+        document.getElementById("sv-r-editar")?.addEventListener("click",()=>{
+          fecharScanner();
+          renderForm(resource,encontrados[0]);
+          setTimeout(()=>$("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"}),100);
+        });
+
+      } else if(encontrados.length>1){
+        // Múltiplos resultados — mostrar lista
+        resultDiv.style.background="rgba(68,136,255,.1)";
+        resultDiv.style.border="1px solid rgba(68,136,255,.3)";
+        resultDiv.innerHTML=`
+          <div style="font-size:11px;color:rgba(255,255,255,.5);margin-bottom:8px;">${encontrados.length} produtos encontrados para "${esc(codigo)}"</div>
+          ${encontrados.slice(0,5).map((m,i)=>{
+            const nome=m.nome||m.produto||"";
+            const preco=Number(m.valorVenda||m.valor_venda||0);
+            return`<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(255,255,255,.06);border-radius:8px;margin-bottom:6px;cursor:pointer;" data-idx="${i}">
+              <div><div style="font-size:13px;font-weight:600;color:#fff;">${esc(nome)}</div><div style="font-size:11px;color:rgba(255,255,255,.4);">${esc(m.codigo||m.sku||"")}</div></div>
+              <div style="font-size:14px;font-weight:700;color:#00e676;white-space:nowrap;">R$ ${preco.toFixed(2).replace(".",",")}</div>
+            </div>`;
+          }).join("")}`;
+        resultDiv.querySelectorAll("[data-idx]").forEach(el=>{
+          el.addEventListener("click",()=>{
+            const idx=Number(el.getAttribute("data-idx"));
+            fecharScanner();
+            renderForm(resource,encontrados[idx]);
+            setTimeout(()=>$("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"}),100);
+          });
+        });
+
+      } else {
+        // Não encontrado
+        resultDiv.style.background="rgba(255,179,0,.08)";
+        resultDiv.style.border="1px solid rgba(255,179,0,.25)";
+        resultDiv.innerHTML=`
+          <div style="font-size:13px;color:var(--amber);font-weight:600;">⚠️ Produto não encontrado</div>
+          <div style="font-size:12px;color:rgba(255,255,255,.4);margin-top:4px;">Buscado: "${esc(codigo)}"</div>
+          <button id="sv-r-criar" style="margin-top:10px;width:100%;padding:12px;background:rgba(0,230,118,.12);border:1px solid rgba(0,230,118,.3);border-radius:10px;color:#00e676;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;">➕ Cadastrar novo produto</button>`;
+        document.getElementById("sv-r-criar")?.addEventListener("click",()=>{
+          fecharScanner();
+          renderForm(resource,null);
+          setTimeout(()=>{
+            const el=$("#sv-form-wrap [name='codigo']")||$("#sv-form-wrap [name='sku']");
+            if(el){ el.value=codigo.toUpperCase(); el.dispatchEvent(new Event("input")); }
+            const nomEl=$("#sv-form-wrap [name='nome']")||$("#sv-form-wrap [name='produto']");
+            if(nomEl&&!nomEl.value) nomEl.focus();
+            $("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"});
+          },150);
+        });
+      }
+    }
+
+    function buscarPorCodigo(codigo){
+      if(!codigo) return;
+      const q=codigo.trim().toLowerCase();
+      const norm=s=>String(s||"").toLowerCase().replace(/\s/g,"");
+
+      // 1. Busca exata por código/SKU
+      let encontrados=rawItems.filter(m=>
+        norm(m.codigo)===norm(q)||norm(m.sku)===norm(q)||
+        norm(m.codigoBarras)===norm(q)||norm(m.barcode)===norm(q)
+      );
+      // 2. Se não achou exato, busca parcial em nome + código
+      if(!encontrados.length){
+        encontrados=rawItems.filter(m=>
+          String(m.nome||m.produto||"").toLowerCase().includes(q)||
+          String(m.codigo||m.sku||"").toLowerCase().includes(q)||
+          String(m.marca||"").toLowerCase().includes(q)
+        );
+      }
+      exibirResultado(codigo, encontrados);
+    }
+
+    // ── OCR via Claude API ──────────────────────────────────────────────────
+    async function processarFotoOCR(){
+      if(!stream||!video.readyState||video.readyState<2) return;
+      canvas.width=video.videoWidth||640;
+      canvas.height=video.videoHeight||480;
+      const ctx=canvas.getContext("2d");
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+      const fotoBtn=document.getElementById("sv-foto-btn");
+      if(fotoBtn){ fotoBtn.disabled=true; fotoBtn.textContent="⏳"; }
+      if(status) status.textContent="🤖 Analisando imagem...";
+
+      try{
+        const base64=canvas.toDataURL("image/jpeg",0.85).split(",")[1];
+        const resp=await fetch("https://api.anthropic.com/v1/messages",{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({
+            model:"claude-sonnet-4-20250514",
+            max_tokens:200,
+            messages:[{
+              role:"user",
+              content:[
+                {type:"image",source:{type:"base64",media_type:"image/jpeg",data:base64}},
+                {type:"text",text:`Analise esta imagem de produto/etiqueta e extraia APENAS o código do produto ou referência alfanumérica (ex: ST5454, CHV-001, ABC123). Se houver um código de barras, extraia o número dele. Se houver apenas nome do produto sem código, retorne o nome. Responda SOMENTE com o código ou nome encontrado, sem explicações. Se não conseguir identificar nada útil, responda: NAO_IDENTIFICADO`}
+              ]
+            }]
+          })
+        });
+        const data=await resp.json();
+        const texto=(data?.content?.[0]?.text||"").trim();
+
+        if(!texto||texto==="NAO_IDENTIFICADO"||texto.length<2){
+          if(status) status.textContent="Não consegui ler o texto — tente aproximar mais";
+          if(fotoBtn){ fotoBtn.disabled=false; fotoBtn.textContent="📸"; }
+          return;
+        }
+
+        if(status) status.textContent=`Texto lido: "${texto}"`;
+        buscarPorCodigo(texto);
+
+      }catch(e){
+        if(status) status.textContent="Erro ao analisar — tente novamente";
+        console.warn("OCR erro:",e);
+      }
+      if(fotoBtn){ fotoBtn.disabled=false; fotoBtn.textContent="📸"; }
+    }
+
+    // ── Tabs: trocar modo ───────────────────────────────────────────────────
+    function setModo(modo){
+      modoAtual=modo;
+      ultimoCodigo="";
+      resultDiv.style.display="none";
+
+      const tabBar=document.getElementById("tab-barcode");
+      const tabOcr=document.getElementById("tab-ocr");
+      const miraBar=document.getElementById("sv-mira-barcode");
+      const miraOcr=document.getElementById("sv-mira-ocr");
+      const fotoBtnWrap=document.getElementById("sv-foto-btn-wrap");
+
+      if(modo==="barcode"){
+        tabBar.style.background="rgba(0,230,118,.15)"; tabBar.style.color="#00e676"; tabBar.style.borderBottom="2px solid #00e676";
+        tabOcr.style.background="transparent"; tabOcr.style.color="rgba(255,255,255,.5)"; tabOcr.style.borderBottom="2px solid transparent";
+        miraBar.style.display="flex"; miraOcr.style.display="none"; fotoBtnWrap.style.display="none";
+        if(hint) hint.textContent="Modo barras: leitura automática contínua";
+        if(status) status.textContent="Aponte para o código de barras";
+        document.getElementById("sv-scan-manual").placeholder="Ou digite o código...";
+        document.getElementById("sv-scan-manual").inputMode="numeric";
+      } else {
+        tabOcr.style.background="rgba(255,200,0,.1)"; tabOcr.style.color="#ffd700"; tabOcr.style.borderBottom="2px solid #ffd700";
+        tabBar.style.background="transparent"; tabBar.style.color="rgba(255,255,255,.5)"; tabBar.style.borderBottom="2px solid transparent";
+        miraBar.style.display="none"; miraOcr.style.display="flex"; fotoBtnWrap.style.display="flex";
+        if(hint) hint.textContent="Enquadre a etiqueta e toque 📸 para analisar";
+        if(status) status.textContent="Posicione o produto no enquadramento";
+        document.getElementById("sv-scan-manual").placeholder="Ou digite código/nome do produto...";
+        document.getElementById("sv-scan-manual").inputMode="text";
+      }
+    }
+
+    document.getElementById("tab-barcode")?.addEventListener("click",()=>setModo("barcode"));
+    document.getElementById("tab-ocr")?.addEventListener("click",()=>setModo("ocr"));
+    document.getElementById("sv-foto-btn")?.addEventListener("click",processarFotoOCR);
+
+    // ── Busca manual ────────────────────────────────────────────────────────
+    const manualInput=document.getElementById("sv-scan-manual");
+    document.getElementById("sv-scan-manual-btn")?.addEventListener("click",()=>{
+      const v=manualInput?.value?.trim(); if(v) buscarPorCodigo(v);
+    });
+    manualInput?.addEventListener("keydown",e=>{
+      if(e.key==="Enter"){ const v=manualInput.value.trim(); if(v) buscarPorCodigo(v); }
+    });
+
+    // ── Iniciar câmera ──────────────────────────────────────────────────────
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:"environment",width:{ideal:1280},height:{ideal:720}}
+      });
+      video.srcObject=stream;
+      await video.play();
+      canvas.width=video.videoWidth||640;
+      canvas.height=video.videoHeight||480;
+      if(status) status.textContent="Câmera ativa — aponte para o código";
+
+      // BarcodeDetector nativo
+      if(typeof BarcodeDetector!=="undefined"){
+        try{
+          const fmts=await BarcodeDetector.getSupportedFormats().catch(()=>[]);
+          detector=new BarcodeDetector({formats:fmts.length?fmts:["ean_13","ean_8","code_128","qr_code","upc_a","upc_e","code_39","code_93"]});
+        }catch{ detector=null; }
+      }
+
+      // Loop de detecção (só no modo barcode)
+      const ctx=canvas.getContext("2d");
+      const loopDetect=async()=>{
+        if(!stream) return;
+        if(modoAtual==="barcode"&&video.readyState>=2){
+          try{
+            if(detector){
+              const hits=await detector.detect(video);
+              if(hits.length){
+                const cod=hits[0].rawValue;
+                if(cod!==ultimoCodigo){
+                  ultimoCodigo=cod;
+                  clearTimeout(debounceTimer);
+                  debounceTimer=setTimeout(()=>buscarPorCodigo(cod),250);
+                }
+              }
+            } else if(window.ZXing){
+              ctx.drawImage(video,0,0,canvas.width,canvas.height);
+              const imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
+              const res=window.ZXing.readBarcodesFromImageData?.(imgData,{tryHarder:true});
+              if(res?.length&&res[0].text&&res[0].text!==ultimoCodigo){
+                ultimoCodigo=res[0].text;
+                clearTimeout(debounceTimer);
+                debounceTimer=setTimeout(()=>buscarPorCodigo(res[0].text),250);
+              }
+            }
+          }catch{}
+        }
+        rafId=requestAnimationFrame(loopDetect);
+      };
+      loopDetect();
+
+      // Fallback ZXing
+      if(!detector&&!window.ZXing){
+        const s=document.createElement("script");
+        s.src="https://cdn.jsdelivr.net/npm/zxing-wasm@1.2.8/dist/full/zxing_full.min.js";
+        s.onload=()=>window.ZXing?.initialize?.().catch(()=>{});
+        document.head.appendChild(s);
+      }
+
+    }catch(e){
+      if(status) status.textContent="❌ Câmera indisponível — use a busca manual";
+      console.warn("Câmera:",e?.message);
+    }
+  }
+
+  // ─── Manuais ──────────────────────────────────────────────────────────────────
 
   // ─── Manuais ──────────────────────────────────────────────────────────────────
   async function renderManuais(root){
