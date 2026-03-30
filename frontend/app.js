@@ -63,6 +63,7 @@
     {id:"financeiro",  label:"Financeiro",  icon:"💰"},
     {id:"relatorios",  label:"Relatórios",  icon:"📈"},
     {id:"manuais",     label:"Manuais",     icon:"📚"},
+    {id:"visitas",     label:"Visitas",     icon:"🏢"},
     {id:"rotas",       label:"Rotas",       icon:"🗺️", resource:"rotas"},
     {id:"despesas",    label:"Despesas",    icon:"💸", resource:"despesas"},
     {id:"lembretes",   label:"Lembretes",   icon:"🔔", resource:"lembretes"},
@@ -486,6 +487,7 @@
       renderRelatorios(root);return;
     }
     if(route.id==="manuais"){renderManuais(root);return;}
+    if(route.id==="visitas"){renderVisitas(root);return;}
     if(route.id==="rotas"){
       if(!temPermissaoLocal("rotas")){root.innerHTML=`<div class="card"><p style="color:var(--red);">🚫 Sem permissão para acessar Rotas.</p></div>`;return;}
       renderRotas(root);return;
@@ -650,6 +652,7 @@
         ${resource==="mercadorias"?`
         <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center;">
           <button id="sv-scan-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.3);color:var(--green);">📷 Ler código de barras</button>
+          <button id="sv-fotonota-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(68,136,255,.08);border-color:rgba(68,136,255,.25);color:var(--blue);">📸 Importar por foto</button>
           <button id="sv-export-btn" class="btn btn-secondary" style="font-size:12px;">📤 Exportar CSV</button>
           <label id="sv-import-label" class="btn btn-secondary" style="font-size:12px;cursor:pointer;margin:0;">
             📥 Importar CSV/Excel
@@ -758,6 +761,7 @@
     // Scanner de código de barras via câmera
     if(resource==="mercadorias"){
       $("#sv-scan-btn")?.addEventListener("click",()=>abrirScanner(root,rawItems,resource));
+      $("#sv-fotonota-btn")?.addEventListener("click",()=>abrirFotoNotaMercadorias(root,rawItems));
     }
 
     renderList(resource,getFiltered(),rawItems);
@@ -899,6 +903,18 @@
       if(d.length===8) displayVal=d.replace(/^(\d{5})(\d{3})$/,"$1-$2");
     }
     const inputStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;-webkit-appearance:none;${noUpper||f.key==="telefone"||f.key==="cep"?"":"text-transform:uppercase;"}`;
+
+    // Campo endereço com botão de localização atual
+    if(f.key==="endereco"){
+      return`<div class="field">
+        <label style="display:flex;align-items:center;justify-content:space-between;">
+          ${esc(f.label)}
+          <button type="button" id="btn-geo-endereco" style="font-size:11px;padding:3px 8px;background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.3);border-radius:6px;color:var(--green);cursor:pointer;font-family:var(--font);">📍 Usar localização</button>
+        </label>
+        <input type="text" name="${esc(f.key)}" id="inp-endereco" value="${esc(displayVal)}" style="${inputStyle}"/>
+      </div>`;
+    }
+
     return`<div class="field"><label>${esc(f.label)}</label><input type="${type}" name="${esc(f.key)}" value="${esc(displayVal)}" style="${inputStyle}"/></div>`;
   }
 
@@ -977,8 +993,12 @@
       <div class="form-card">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
           <div style="font-size:15px;font-weight:600;">${isEdit?"✏️ Editar":"➕ Novo"} ${esc(schema.title)}</div>
-          <button id="sv-close-form" class="btn btn-ghost btn-icon">✕</button>
+          <div style="display:flex;gap:6px;align-items:center;">
+            ${(resource==="notas"||resource==="lembretes")?`<button type="button" id="sv-voz-btn" title="Inserir por voz" style="background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.3);border-radius:8px;padding:6px 12px;color:var(--green);font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font);">🎤 Voz</button>`:""}
+            <button id="sv-close-form" class="btn btn-ghost btn-icon">✕</button>
+          </div>
         </div>
+        ${(resource==="notas"||resource==="lembretes")?`<div id="sv-voz-status" style="display:none;font-size:12px;color:var(--green);padding:8px 10px;background:rgba(0,230,118,.06);border-radius:8px;margin-bottom:10px;text-align:center;">🎤 Ouvindo... fale o conteúdo</div>`:""}
         <form id="sv-crud-form">
           <div class="form-grid">${schema.fields.map(f=>renderField(f,itemView?.[f.key])).join("")}</div>
           ${isEdit&&resource==="mercadorias"?`
@@ -992,6 +1012,7 @@
           </div>`:""}
           <div class="form-actions">
             <button type="submit" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Criar"}</button>
+            ${isEdit&&resource==="clientes"?`<button type="button" id="sv-btn-pedido-cliente" class="btn btn-secondary" style="font-size:13px;">🛒 Novo pedido</button>`:""}
             ${isEdit?`<button type="button" id="sv-delete-current" class="btn btn-danger">🗑️ Excluir</button>`:""}
             <button type="button" id="sv-cancel-form" class="btn btn-ghost">Cancelar</button>
           </div>
@@ -1005,6 +1026,50 @@
 
     bindAutocomplete(wrap,schema);
     aplicarMascaras(wrap);
+
+    // Geolocalização no endereço (clientes)
+    wrap.querySelector("#btn-geo-endereco")?.addEventListener("click",async()=>{
+      const btn=wrap.querySelector("#btn-geo-endereco");
+      const inp=wrap.querySelector("#inp-endereco");
+      if(!inp) return;
+      if(!navigator.geolocation){toast("Geolocalização não disponível neste dispositivo.","warning");return;}
+      btn.textContent="⏳ Buscando..."; btn.disabled=true;
+      navigator.geolocation.getCurrentPosition(async pos=>{
+        const {latitude:lat,longitude:lng}=pos.coords;
+        try{
+          const r=await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+            {headers:{"User-Agent":"supervenda-app"}});
+          const d=await r.json();
+          const a=d.address||{};
+          const rua=a.road||a.pedestrian||a.footway||"";
+          const num=a.house_number||"";
+          const bairro=a.suburb||a.neighbourhood||a.quarter||"";
+          const cidade=a.city||a.town||a.village||"";
+          const uf=a.state_code||a.state||"";
+          const cep=(a.postcode||"").replace(/\D/g,"");
+          // Preencher campos do formulário
+          inp.value=(rua+(num?" "+num:"")).toUpperCase();
+          const campos={bairro,cidade,"uf":uf,cep};
+          Object.entries(campos).forEach(([k,v])=>{
+            const el=wrap.querySelector(`[name="${k}"]`);
+            if(el&&v) el.value=k==="cep"?v.replace(/^(\d{5})(\d{3})$/,"$1-$2"):v.toUpperCase();
+          });
+          toast("📍 Endereço preenchido pela localização atual.","success");
+        }catch{
+          inp.value=`LAT ${lat.toFixed(6)}, LNG ${lng.toFixed(6)}`;
+          toast("Localização obtida (sem endereço reverso disponível).","info");
+        }
+        btn.textContent="📍 Usar localização"; btn.disabled=false;
+      },err=>{
+        toast("Não foi possível obter localização: "+err.message,"error");
+        btn.textContent="📍 Usar localização"; btn.disabled=false;
+      },{enableHighAccuracy:true,timeout:10000});
+    });
+
+    // Entrada por voz em Anotações e Lembretes
+    if(resource==="notas"||resource==="lembretes"){
+      setTimeout(()=>bindVozNoCampo(wrap),100);
+    }
 
     // Ajuste % mercadorias
     $("#sv-pct-apply")?.addEventListener("click",()=>{
@@ -1020,6 +1085,21 @@
     });
     $("#sv-close-form")?.addEventListener("click",()=>{wrap.innerHTML="";});
     $("#sv-cancel-form")?.addEventListener("click",()=>{wrap.innerHTML="";});
+
+    // Botão novo pedido a partir do cliente
+    $("#sv-btn-pedido-cliente")?.addEventListener("click",()=>{
+      const nome=wrap.querySelector("[name='nome']")?.value||itemView?.nome||"";
+      wrap.innerHTML="";
+      navigate("pedidos");
+      setTimeout(()=>{
+        renderFormPedido(null);
+        setTimeout(()=>{
+          const acInp=$("#sv-form-wrap #ac-clienteNome");
+          if(acInp&&nome){ acInp.value=nome.toUpperCase(); acInp.dispatchEvent(new Event("input")); }
+          $("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"});
+        },120);
+      },80);
+    });
 
     $("#sv-crud-form")?.addEventListener("submit",async e=>{
       e.preventDefault();
@@ -1908,6 +1988,7 @@
         const m=encontrados[0];
         const nome=m.nome||m.produto||"";
         const preco=Number(m.valorVenda||m.valor_venda||0);
+        const cod=m.codigo||m.sku||codigo;
         resultDiv.style.background="rgba(0,230,118,.1)";
         resultDiv.style.border="1px solid rgba(0,230,118,.3)";
         resultDiv.innerHTML=`
@@ -1970,22 +2051,27 @@
     function buscarPorCodigo(codigo){
       if(!codigo) return;
       const q=codigo.trim().toLowerCase();
-      const norm=s=>String(s||"").toLowerCase().replace(/\s/g,"");
+      const norm=s=>String(s||"").toLowerCase().replace(/[\s\-_]/g,"");
+      // Normalizar rawItems para garantir campo nome/codigo correto
+      const items=rawItems.map(m=>normalizeItem(resource,m));
 
-      // 1. Busca exata por código/SKU
-      let encontrados=rawItems.filter(m=>
+      // 1. Busca exata por código/SKU/barcode
+      let encontrados=items.filter(m=>
         norm(m.codigo)===norm(q)||norm(m.sku)===norm(q)||
         norm(m.codigoBarras)===norm(q)||norm(m.barcode)===norm(q)
       );
-      // 2. Se não achou exato, busca parcial em nome + código
+      // 2. Busca parcial em nome + código + marca
       if(!encontrados.length){
-        encontrados=rawItems.filter(m=>
+        encontrados=items.filter(m=>
           String(m.nome||m.produto||"").toLowerCase().includes(q)||
           String(m.codigo||m.sku||"").toLowerCase().includes(q)||
-          String(m.marca||"").toLowerCase().includes(q)
+          String(m.marca||"").toLowerCase().includes(q)||
+          String(m.descricao||"").toLowerCase().includes(q)
         );
       }
-      exibirResultado(codigo, encontrados);
+      // Referenciar os rawItems originais para o renderForm funcionar corretamente
+      const encontradosRaw=encontrados.map(m=>rawItems.find(r=>getId(r)===getId(m))||m);
+      exibirResultado(codigo, encontradosRaw);
     }
 
     // ── OCR via Claude API ──────────────────────────────────────────────────
@@ -2018,15 +2104,19 @@
           })
         });
         const data=await resp.json();
-        const texto=(data?.content?.[0]?.text||"").trim();
+        const texto=(data?.content?.[0]?.text||"").trim().replace(/["'.]/g,"");
 
         if(!texto||texto==="NAO_IDENTIFICADO"||texto.length<2){
-          if(status) status.textContent="Não consegui ler o texto — tente aproximar mais";
+          if(status) status.textContent="Não consegui ler — tente aproximar mais ou melhorar a luz";
+          toast("Não foi possível identificar texto na imagem.","warning");
           if(fotoBtn){ fotoBtn.disabled=false; fotoBtn.textContent="📸"; }
           return;
         }
 
-        if(status) status.textContent=`Texto lido: "${texto}"`;
+        if(status) status.textContent=`🔤 Texto lido: "${texto}"`;
+        // Preencher a busca manual e disparar a busca
+        const manInp=document.getElementById("sv-scan-manual");
+        if(manInp){ manInp.value=texto; }
         buscarPorCodigo(texto);
 
       }catch(e){
@@ -2145,7 +2235,396 @@
     }
   }
 
-  // ─── Manuais ──────────────────────────────────────────────────────────────────
+  // ─── Entrada por Voz (Anotações e Lembretes) ─────────────────────────────────
+  function bindVozNoCampo(wrap){
+    if(!('webkitSpeechRecognition' in window)&&!('SpeechRecognition' in window)) return;
+    const textareas=wrap.querySelectorAll("textarea");
+    textareas.forEach(ta=>{
+      const btnId="btn-voz-"+ta.name;
+      const lbl=ta.closest(".field")?.querySelector("label");
+      if(!lbl||wrap.querySelector("#"+btnId)) return;
+      const btn=document.createElement("button");
+      btn.type="button"; btn.id=btnId;
+      btn.style.cssText="margin-left:8px;padding:3px 8px;background:rgba(68,136,255,.1);border:1px solid rgba(68,136,255,.3);border-radius:6px;color:var(--blue);font-size:11px;cursor:pointer;font-family:var(--font);";
+      btn.textContent="🎤 Voz";
+      lbl.style.display="flex"; lbl.style.alignItems="center"; lbl.style.justifyContent="space-between";
+      lbl.appendChild(btn);
+      let rec=null, gravando=false;
+      btn.addEventListener("click",()=>{
+        if(gravando){rec?.stop();return;}
+        const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+        rec=new SR();
+        rec.lang="pt-BR"; rec.continuous=true; rec.interimResults=true;
+        rec.onstart=()=>{gravando=true;btn.textContent="⏹ Parar";btn.style.background="rgba(255,82,82,.15)";btn.style.borderColor="rgba(255,82,82,.4)";btn.style.color="var(--red)";};
+        rec.onend=()=>{gravando=false;btn.textContent="🎤 Voz";btn.style.background="rgba(68,136,255,.1)";btn.style.borderColor="rgba(68,136,255,.3)";btn.style.color="var(--blue)";};
+        rec.onerror=e=>{toast("Erro no reconhecimento de voz: "+e.error,"warning");rec.stop();};
+        rec.onresult=e=>{
+          let texto="";
+          for(let i=e.resultIndex;i<e.results.length;i++){
+            if(e.results[i].isFinal) texto+=e.results[i][0].transcript+" ";
+          }
+          if(texto.trim()) ta.value=(ta.value?(ta.value+" "):"")+texto.trim().toUpperCase();
+        };
+        try{rec.start();}catch(e){toast("Microfone indisponível.","warning");}
+      });
+    });
+  }
+
+  // ─── Foto de Nota/Orçamento → Cadastro Automático de Mercadorias ─────────────
+  async function abrirFotoNotaMercadorias(root, rawItems){
+    const wrapId="sv-foto-nota-wrap";
+    let existing=document.getElementById(wrapId);
+    if(existing){existing.remove();return;}
+    const container=document.createElement("div");
+    container.id=wrapId;
+    root.querySelector(".card")?.after(container)||root.prepend(container);
+
+    const inStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;`;
+    container.innerHTML=`
+      <div class="card" style="border-color:rgba(0,230,118,.2);background:rgba(0,230,118,.03);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div>
+            <div style="font-size:14px;font-weight:700;">📸 Importar produtos por foto</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px;">Foto de nota, orçamento ou tela com estoque</div>
+          </div>
+          <button id="fn-fechar" class="btn btn-ghost btn-icon">✕</button>
+        </div>
+
+        <label id="fn-upload-label" style="display:flex;flex-direction:column;align-items:center;gap:8px;
+          border:2px dashed var(--border-hi);border-radius:12px;padding:24px 16px;cursor:pointer;text-align:center;
+          background:var(--bg2);transition:border-color .2s;" id="fn-area">
+          <span style="font-size:36px;">📄</span>
+          <span style="font-size:14px;font-weight:600;">Toque para tirar/selecionar foto</span>
+          <span style="font-size:12px;color:var(--muted);">JPG, PNG ou PDF da nota/orçamento</span>
+          <input type="file" id="fn-file" accept="image/*,application/pdf" capture="environment" style="display:none;"/>
+        </label>
+        <div id="fn-preview" style="display:none;margin-top:10px;text-align:center;">
+          <img id="fn-img" style="max-width:100%;max-height:200px;border-radius:10px;object-fit:contain;"/>
+          <div id="fn-status" style="margin-top:8px;font-size:13px;color:var(--muted);">Pronto para analisar</div>
+          <button id="fn-analisar" class="btn btn-primary" style="margin-top:10px;width:100%;">🤖 Analisar e importar produtos</button>
+        </div>
+        <div id="fn-resultado" style="display:none;margin-top:12px;"></div>
+      </div>`;
+
+    document.getElementById("fn-fechar")?.addEventListener("click",()=>container.remove());
+
+    const fileInput=document.getElementById("fn-file");
+    document.getElementById("fn-upload-label")?.addEventListener("click",()=>fileInput?.click());
+    let base64Foto="", tipoFoto="image/jpeg";
+
+    fileInput?.addEventListener("change",e=>{
+      const file=e.target.files[0]; if(!file) return;
+      tipoFoto=file.type||"image/jpeg";
+      const reader=new FileReader();
+      reader.onload=ev=>{
+        const src=ev.target.result;
+        base64Foto=src.split(",")[1];
+        const preview=document.getElementById("fn-preview");
+        const img=document.getElementById("fn-img");
+        if(preview) preview.style.display="block";
+        if(img&&tipoFoto.includes("image")) img.src=src;
+        else if(img) img.src=""; // PDF não pré-visualiza
+        document.getElementById("fn-status").textContent=`Arquivo: ${file.name} (${(file.size/1024).toFixed(0)}KB)`;
+        document.getElementById("fn-upload-label").style.borderColor="var(--green)";
+      };
+      reader.readAsDataURL(file);
+    });
+
+    document.getElementById("fn-analisar")?.addEventListener("click",async()=>{
+      if(!base64Foto){toast("Selecione uma imagem primeiro.","warning");return;}
+      const btn=document.getElementById("fn-analisar");
+      const status=document.getElementById("fn-status");
+      btn.disabled=true; btn.textContent="⏳ Analisando...";
+      status.textContent="🤖 Claude está lendo os produtos da imagem...";
+
+      try{
+        const resp=await fetch("https://api.anthropic.com/v1/messages",{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({
+            model:"claude-sonnet-4-20250514",
+            max_tokens:2000,
+            messages:[{
+              role:"user",
+              content:[
+                {type:"image",source:{type:"base64",media_type:tipoFoto.includes("image")?tipoFoto:"image/jpeg",data:base64Foto}},
+                {type:"text",text:`Analise esta imagem (pode ser nota fiscal, orçamento, lista de estoque ou tabela de preços) e extraia todos os produtos visíveis.
+Para cada produto, retorne um JSON array com os campos: nome, codigo, marca, valor_compra, valor_venda, estoque, categoria.
+Use 0 para campos numéricos não visíveis e "" para strings não visíveis.
+Tente inferir valor_venda a partir do preço unitário listado. Se houver quantidade, use como estoque.
+Responda APENAS com o JSON array, sem explicações, sem markdown, sem backticks.
+Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_compra":0,"valor_venda":12.90,"estoque":10,"categoria":"FERRAMENTAS"}]`}
+              ]
+            }]
+          })
+        });
+        const data=await resp.json();
+        let txt=(data?.content?.[0]?.text||"").trim().replace(/```json|```/g,"").trim();
+        let produtos;
+        try{ produtos=JSON.parse(txt); }
+        catch{ throw new Error("Não consegui extrair produtos estruturados da imagem. Tente com uma imagem mais nítida."); }
+
+        if(!Array.isArray(produtos)||!produtos.length) throw new Error("Nenhum produto identificado na imagem.");
+
+        // Montar preview da tabela para confirmação
+        const resDiv=document.getElementById("fn-resultado");
+        resDiv.style.display="block";
+        resDiv.innerHTML=`
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--green);">✅ ${produtos.length} produto${produtos.length>1?"s":""} identificado${produtos.length>1?"s":""}:</div>
+          <div style="overflow-x:auto;border-radius:10px;border:1px solid var(--border);">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+              <thead><tr style="background:var(--bg3);">
+                <th style="padding:8px;text-align:left;border-bottom:1px solid var(--border);">Produto</th>
+                <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border);">R$ Venda</th>
+                <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border);">Estoque</th>
+                <th style="padding:8px;border-bottom:1px solid var(--border);"></th>
+              </tr></thead>
+              <tbody>
+                ${produtos.map((p,i)=>`<tr style="border-bottom:1px solid var(--border);">
+                  <td style="padding:8px;"><div style="font-weight:600;">${esc(p.nome||"")}</div><div style="font-size:11px;color:var(--muted);">${esc(p.codigo||"")}${p.marca?" · "+esc(p.marca):""}</div></td>
+                  <td style="padding:8px;text-align:right;font-weight:600;color:var(--green);">${Number(p.valor_venda||0)>0?moneyBR(p.valor_venda):"—"}</td>
+                  <td style="padding:8px;text-align:right;">${p.estoque||0}</td>
+                  <td style="padding:8px;"><input type="checkbox" data-fn-idx="${i}" checked style="width:16px;height:16px;accent-color:var(--green);cursor:pointer;"/></td>
+                </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px;">
+            <button id="fn-importar-sel" class="btn btn-primary" style="flex:1;">💾 Importar selecionados</button>
+            <button id="fn-cancelar-import" class="btn btn-ghost" style="width:auto;">Cancelar</button>
+          </div>`;
+
+        document.getElementById("fn-cancelar-import")?.addEventListener("click",()=>{resDiv.style.display="none";});
+        document.getElementById("fn-importar-sel")?.addEventListener("click",async()=>{
+          const selecionados=produtos.filter((_,i)=>resDiv.querySelector(`[data-fn-idx="${i}"]`)?.checked);
+          if(!selecionados.length){toast("Selecione ao menos um produto.","warning");return;}
+          await runWithUi(async()=>{
+            let ok=0,erros=0;
+            for(const p of selecionados){
+              if(!p.nome) continue;
+              const payload={
+                nome:String(p.nome).toUpperCase(), produto:String(p.nome).toUpperCase(),
+                codigo:String(p.codigo||"").toUpperCase(), sku:String(p.codigo||"").toUpperCase(),
+                marca:String(p.marca||"").toUpperCase(), categoria:String(p.categoria||"").toUpperCase(),
+                valor_compra:Number(p.valor_compra)||0, valorCompra:Number(p.valor_compra)||0,
+                valor_venda:Number(p.valor_venda)||0, valorVenda:Number(p.valor_venda)||0,
+                estoque:Number(p.estoque)||0, estoqueAtual:Number(p.estoque)||0,
+                estoqueMin:0,
+              };
+              try{
+                const existente=rawItems.find(m=>String(m.nome||m.produto||"").toUpperCase()===payload.nome);
+                if(existente) await DB.update("mercadorias",getId(existente),payload);
+                else await DB.create("mercadorias",payload);
+                ok++;
+              }catch{erros++;}
+            }
+            await loadResource("mercadorias");
+            container.remove();
+            renderCurrent();
+            toast(`✅ ${ok} produto${ok>1?"s":""} importado${ok>1?"s":""}${erros?` · ${erros} erro(s)`:""}`,ok?"success":"warning");
+          },"Importando produtos...");
+        });
+
+      }catch(e){
+        status.textContent="❌ "+String(e?.message||"Erro ao analisar");
+        toast(String(e?.message||"Erro ao analisar"),"error",6000);
+      }
+      btn.disabled=false; btn.textContent="🤖 Analisar e importar produtos";
+    });
+  }
+
+  // ─── Aba Visitas ─────────────────────────────────────────────────────────────
+  async function renderVisitas(root){
+    // Cache local de visitas (IndexedDB-lite via localStorage)
+    function loadVisitas(){try{return JSON.parse(localStorage.getItem("sv_visitas")||"[]");}catch{return[];}}
+    function saveVisitas(v){try{localStorage.setItem("sv_visitas",JSON.stringify(v));}catch{}}
+    let visitas=loadVisitas();
+
+    const inStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;`;
+
+    function renderLista(){
+      const lista=document.getElementById("sv-vis-lista"); if(!lista) return;
+      const q=String(document.getElementById("sv-vis-busca")?.value||"").toLowerCase();
+      const filtradas=q?visitas.filter(v=>
+        String(v.nome||"").toLowerCase().includes(q)||
+        String(v.telefone||"").toLowerCase().includes(q)||
+        String(v.obs||"").toLowerCase().includes(q)
+      ):visitas;
+      if(!filtradas.length){
+        lista.innerHTML=`<div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">${q?"Nenhuma visita encontrada.":"Nenhuma visita registrada ainda."}</div></div>`;
+        return;
+      }
+      lista.innerHTML=filtradas.map((v,i)=>`
+        <div class="list-item">
+          <div class="list-item-top">
+            <div><div class="list-item-title">${esc(v.nome||"")}</div>
+              ${v.endereco?`<div style="font-size:12px;color:var(--muted);margin-top:2px;">📍 ${esc(v.endereco)}</div>`:""}
+            </div>
+            <div style="font-size:11px;color:var(--muted);text-align:right;">${v.data?dateFormatBR(v.data):""}</div>
+          </div>
+          ${v.telefone?`<div class="list-item-meta"><span class="meta-item">📞 ${esc(v.telefone)}</span></div>`:""}
+          ${v.obs?`<div style="font-size:12px;color:var(--muted);margin-top:4px;padding:0 2px;">${esc(v.obs)}</div>`:""}
+          <div class="list-item-actions">
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-vis-cli="${v._id}">👤 → Cliente</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-vis-edit="${v._id}">✏️</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-vis-del="${v._id}">🗑️</button>
+          </div>
+        </div>`).join("");
+
+      // Exportar para cliente
+      lista.querySelectorAll("[data-vis-cli]").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          const id=btn.getAttribute("data-vis-cli");
+          const v=visitas.find(x=>x._id===id); if(!v) return;
+          if(!confirm(`Exportar "${v.nome}" para o cadastro de Clientes?`)) return;
+          navigate("clientes");
+          setTimeout(()=>{
+            const fake={nome:v.nome,telefone:v.telefone||"",endereco:v.endereco||"",cidade:v.cidade||"",obs:v.obs||""};
+            renderForm("clientes",null);
+            setTimeout(()=>{
+              Object.entries(fake).forEach(([k,val])=>{
+                const el=$("#sv-form-wrap [name='"+k+"']");
+                if(el) el.value=String(val||"").toUpperCase();
+              });
+              $("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"});
+            },100);
+          },80);
+        });
+      });
+      // Editar
+      lista.querySelectorAll("[data-vis-edit]").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          const id=btn.getAttribute("data-vis-edit");
+          const v=visitas.find(x=>x._id===id); if(!v) return;
+          renderFormVisita(v);
+        });
+      });
+      // Excluir
+      lista.querySelectorAll("[data-vis-del]").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          const id=btn.getAttribute("data-vis-del");
+          if(!confirm("Excluir esta visita?")) return;
+          visitas=visitas.filter(x=>x._id!==id);
+          saveVisitas(visitas); renderLista();
+          toast("Visita excluída.","info");
+        });
+      });
+    }
+
+    function renderFormVisita(item=null){
+      const fw=document.getElementById("sv-vis-form"); if(!fw) return;
+      const isEdit=!!item;
+      fw.innerHTML=`
+        <div class="form-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div style="font-size:15px;font-weight:600;">${isEdit?"✏️ Editar":"➕ Nova"} visita</div>
+            <button id="vis-close" class="btn btn-ghost btn-icon">✕</button>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>Empresa / Nome *</label><input id="vis-nome" type="text" value="${esc(item?.nome||"")}" style="${inStyle}text-transform:uppercase;" placeholder="NOME DA EMPRESA"/></div>
+            <div class="field"><label>Telefone</label><input id="vis-tel" type="tel" value="${esc(item?.telefone||"")}" style="${inStyle}" placeholder="(00) 00000-0000"/></div>
+            <div class="field">
+              <label style="display:flex;align-items:center;justify-content:space-between;">
+                Endereço
+                <button type="button" id="vis-geo" style="font-size:11px;padding:3px 8px;background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.3);border-radius:6px;color:var(--green);cursor:pointer;font-family:var(--font);">📍 Localização</button>
+              </label>
+              <input id="vis-end" type="text" value="${esc(item?.endereco||"")}" style="${inStyle}text-transform:uppercase;" placeholder="RUA, NÚMERO, BAIRRO"/>
+            </div>
+            <div class="field"><label>Cidade</label><input id="vis-cid" type="text" value="${esc(item?.cidade||"")}" style="${inStyle}text-transform:uppercase;"/></div>
+            <div class="field"><label>Data da visita</label><input id="vis-data" type="date" value="${esc(item?.data||new Date().toISOString().slice(0,10))}" style="${inStyle}"/></div>
+            <div class="field"><label>Observações</label><textarea id="vis-obs" rows="3" style="${inStyle}resize:vertical;text-transform:uppercase;">${esc(item?.obs||"")}</textarea></div>
+          </div>
+          <div class="form-actions">
+            <button id="vis-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Registrar visita"}</button>
+            <button id="vis-cancel" class="btn btn-ghost">Cancelar</button>
+          </div>
+        </div>`;
+
+      document.getElementById("vis-close")?.addEventListener("click",()=>{fw.innerHTML="";});
+      document.getElementById("vis-cancel")?.addEventListener("click",()=>{fw.innerHTML="";});
+
+      // Geolocalização no endereço da visita
+      document.getElementById("vis-geo")?.addEventListener("click",async()=>{
+        const btn=document.getElementById("vis-geo");
+        if(!navigator.geolocation){toast("Geolocalização indisponível.","warning");return;}
+        btn.textContent="⏳..."; btn.disabled=true;
+        navigator.geolocation.getCurrentPosition(async pos=>{
+          const{latitude:lat,longitude:lng}=pos.coords;
+          try{
+            const r=await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,{headers:{"User-Agent":"supervenda-app"}});
+            const d=await r.json(); const a=d.address||{};
+            const rua=a.road||a.pedestrian||""; const num=a.house_number||"";
+            document.getElementById("vis-end").value=(rua+(num?" "+num:"")).toUpperCase();
+            document.getElementById("vis-cid").value=(a.city||a.town||a.village||"").toUpperCase();
+            toast("📍 Localização preenchida.","success");
+          }catch{
+            document.getElementById("vis-end").value=`LAT ${lat.toFixed(5)}, LNG ${lng.toFixed(5)}`;
+          }
+          btn.textContent="📍 Localização"; btn.disabled=false;
+        },err=>{toast(err.message,"error");btn.textContent="📍 Localização";btn.disabled=false;},{enableHighAccuracy:true,timeout:8000});
+      });
+
+      // Máscara telefone
+      document.getElementById("vis-tel")?.addEventListener("input",e=>{
+        let v=e.target.value.replace(/\D/g,"").slice(0,11);
+        if(v.length<=10) v=v.replace(/^(\d{2})(\d{4})(\d{0,4})$/,"($1) $2-$3");
+        else v=v.replace(/^(\d{2})(\d{5})(\d{0,4})$/,"($1) $2-$3");
+        e.target.value=v.replace(/-$/,"");
+      });
+
+      document.getElementById("vis-salvar")?.addEventListener("click",()=>{
+        const nome=document.getElementById("vis-nome")?.value?.trim()?.toUpperCase();
+        if(!nome){toast("Informe o nome da empresa.","warning");return;}
+        const nova={
+          _id:item?._id||("V"+Date.now()),
+          nome, telefone:document.getElementById("vis-tel")?.value||"",
+          endereco:document.getElementById("vis-end")?.value?.toUpperCase()||"",
+          cidade:document.getElementById("vis-cid")?.value?.toUpperCase()||"",
+          data:document.getElementById("vis-data")?.value||new Date().toISOString().slice(0,10),
+          obs:document.getElementById("vis-obs")?.value?.toUpperCase()||"",
+        };
+        if(isEdit){ visitas=visitas.map(x=>x._id===item._id?nova:x); }
+        else visitas.unshift(nova);
+        saveVisitas(visitas); fw.innerHTML=""; renderLista();
+        toast(`✅ Visita ${isEdit?"atualizada":"registrada"}.`,"success");
+      });
+      setTimeout(()=>fw.scrollIntoView({behavior:"smooth",block:"start"}),60);
+    }
+
+    // Exportar todas as visitas como CSV
+    function exportarVisitas(){
+      if(!visitas.length){toast("Nenhuma visita para exportar.","warning");return;}
+      const cols=["nome","telefone","endereco","cidade","data","obs"];
+      const csv="\uFEFF"+[cols.join(";"),...visitas.map(v=>cols.map(c=>{const x=v[c]||"";return x.includes(";")?`"${x}"`:x;}).join(";"))].join("\n");
+      const a=Object.assign(document.createElement("a"),{href:URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"})),download:`visitas_${new Date().toISOString().slice(0,10)}.csv`});
+      a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+      toast(`${visitas.length} visitas exportadas.`,"success");
+    }
+
+    // Render principal
+    root.innerHTML=`
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <div class="card-title">🏢 Visitas</div>
+          <div style="display:flex;gap:6px;">
+            <button id="vis-nova-btn" class="btn btn-primary" style="width:auto;">+ Nova visita</button>
+            <button id="vis-export-btn" class="btn btn-secondary" style="font-size:12px;">📤 CSV</button>
+          </div>
+        </div>
+        <div class="search-wrap" style="margin-top:10px;">
+          <span class="search-icon">🔍</span>
+          <input id="sv-vis-busca" type="search" placeholder="Buscar visitas..." autocomplete="off"/>
+        </div>
+        <div style="margin-top:6px;font-size:12px;color:var(--muted);">${visitas.length} visita${visitas.length!==1?"s":""} registrada${visitas.length!==1?"s":""}</div>
+      </div>
+      <div id="sv-vis-form"></div>
+      <div id="sv-vis-lista"></div>`;
+
+    renderLista();
+    document.getElementById("vis-nova-btn")?.addEventListener("click",()=>renderFormVisita(null));
+    document.getElementById("vis-export-btn")?.addEventListener("click",exportarVisitas);
+    document.getElementById("sv-vis-busca")?.addEventListener("input",renderLista);
+  }
 
   // ─── Manuais ──────────────────────────────────────────────────────────────────
   async function renderManuais(root){
