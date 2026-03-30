@@ -2237,100 +2237,77 @@
   // ─── Entrada por Voz (Anotações e Lembretes) ─────────────────────────────────
   function bindVozNoCampo(wrap){
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR) return; // API não suportada
+    if(!SR) return;
 
-    // Aplicar em inputs de texto E textareas — exceto numéricos, email, date, hidden
     const campos=Array.from(wrap.querySelectorAll("input,textarea")).filter(el=>{
       const t=(el.type||"text").toLowerCase();
       return !["number","email","date","checkbox","radio","file","submit","button","hidden","search"].includes(t);
     });
 
     campos.forEach(campo=>{
-      const nome=campo.name||campo.id||Math.random().toString(36).slice(2);
-      const btnId="btn-voz-"+nome;
-      if(wrap.querySelector("#"+btnId)) return; // já tem botão
-
+      const nome=campo.name||campo.id||Math.random().toString(36).slice(2,8);
+      const btnId="bvoz-"+nome;
+      if(wrap.querySelector("#"+btnId)) return;
       const lbl=campo.closest(".field")?.querySelector("label");
       if(!lbl) return;
 
       const btn=document.createElement("button");
       btn.type="button"; btn.id=btnId;
-      btn.style.cssText="margin-left:6px;padding:2px 8px;background:rgba(68,136,255,.1);border:1px solid rgba(68,136,255,.3);border-radius:6px;color:var(--blue);font-size:11px;cursor:pointer;font-family:var(--font);white-space:nowrap;flex-shrink:0;";
+      btn.style.cssText="margin-left:6px;padding:3px 9px;background:rgba(68,136,255,.12);border:1px solid rgba(68,136,255,.3);border-radius:6px;color:var(--blue);font-size:12px;cursor:pointer;font-family:var(--font);flex-shrink:0;";
       btn.textContent="🎤";
-      btn.title="Inserir por voz";
-      lbl.style.display="flex";
-      lbl.style.alignItems="center";
-      lbl.style.justifyContent="space-between";
+      btn.title="Clique para falar";
+      lbl.style.cssText+="display:flex;align-items:center;justify-content:space-between;";
       lbl.appendChild(btn);
 
-      let rec=null, gravando=false, acumulado="";
-
-      const setEstado=(ativo)=>{
-        gravando=ativo;
-        btn.textContent=ativo?"⏹":"🎤";
-        btn.style.background=ativo?"rgba(255,82,82,.15)":"rgba(68,136,255,.1)";
-        btn.style.borderColor=ativo?"rgba(255,82,82,.4)":"rgba(68,136,255,.3)";
-        btn.style.color=ativo?"var(--red)":"var(--blue)";
-        btn.title=ativo?"Parar gravação":"Inserir por voz";
-      };
+      let rec=null, ativo=false;
 
       btn.addEventListener("click",()=>{
-        if(gravando){ rec?.stop(); return; }
+        if(ativo){ rec?.stop(); return; }
 
-        acumulado=""; // reset do acumulador a cada nova sessão
         rec=new SR();
         rec.lang="pt-BR";
-        rec.continuous=true;
-        rec.interimResults=true;
+        rec.continuous=false;   // ← uma frase por vez: sem repetição
+        rec.interimResults=false; // ← só entrega resultado final confirmado
 
-        rec.onstart=()=>setEstado(true);
-        rec.onend=()=>{ setEstado(false); rec=null; };
+        rec.onstart=()=>{
+          ativo=true;
+          btn.textContent="⏹";
+          btn.style.background="rgba(255,82,82,.15)";
+          btn.style.borderColor="rgba(255,82,82,.4)";
+          btn.style.color="var(--red)";
+          btn.title="Parar";
+        };
+
+        rec.onend=()=>{
+          ativo=false;
+          btn.textContent="🎤";
+          btn.style.background="rgba(68,136,255,.12)";
+          btn.style.borderColor="rgba(68,136,255,.3)";
+          btn.style.color="var(--blue)";
+          btn.title="Clique para falar";
+          rec=null;
+        };
+
         rec.onerror=e=>{
           const msgs={
-            "not-allowed":"Permissão de microfone negada. Libere nas configurações do browser.",
-            "no-speech":"Nenhuma fala detectada. Tente novamente.",
-            "network":"Erro de conexão no reconhecimento de voz.",
+            "not-allowed":"Permissão de microfone negada.",
+            "no-speech":"Nenhuma fala detectada.",
+            "network":"Erro de conexão.",
           };
-          toast(msgs[e.error]||"Erro de voz: "+e.error,"warning",4000);
+          toast(msgs[e.error]||"Erro: "+e.error,"warning",3000);
           rec?.stop();
         };
 
         rec.onresult=e=>{
-          // ── CORREÇÃO DA REPETIÇÃO ──────────────────────────────────────────
-          // Apenas processar resultados FINAIS a partir de resultIndex
-          // e acumular separadamente — nunca reler resultados já confirmados
-          let novoFinal="";
-          for(let i=e.resultIndex; i<e.results.length; i++){
-            if(e.results[i].isFinal){
-              novoFinal+=e.results[i][0].transcript;
-            }
-          }
-          if(!novoFinal) return; // só interim, ignorar
-
-          // Limpar repetições acidentais (palavra repetida 2x seguidas)
-          const limpar=txt=>txt
-            .replace(/(\b\w+\b)(\s+\1)+/gi,"$1") // remove duplicatas consecutivas
-            .replace(/\s{2,}/g," ")
-            .trim()
-            .toUpperCase();
-
-          const novoLimpo=limpar(novoFinal);
-          if(!novoLimpo) return;
-
-          acumulado+=novoLimpo+" ";
-
-          // Atualizar campo: valor original + novo acumulado
-          const base=campo.dataset.vozBase||(campo.value
-            .replace(acumulado.trim(),"")
-            .trim());
-          campo.dataset.vozBase=campo.dataset.vozBase||base;
-          campo.value=(base?(base+" "):"")+acumulado.trim();
+          // Com interimResults=false, results[0] é sempre final e único
+          const texto=(e.results[0][0].transcript||"").trim().toUpperCase();
+          if(!texto) return;
+          const sep=campo.value.trim()?" ":"";
+          campo.value=campo.value.trim()+sep+texto;
           campo.dispatchEvent(new Event("input",{bubbles:true}));
+          // Reiniciar automaticamente para continuar ditando
+          setTimeout(()=>{ if(!ativo) btn.click(); },300);
         };
-
-        // Salvar base antes de começar
-        campo.dataset.vozBase=campo.value.trim();
-        acumulado="";
 
         try{ rec.start(); }
         catch(e){ toast("Microfone indisponível.","warning"); }
