@@ -994,11 +994,9 @@
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
           <div style="font-size:15px;font-weight:600;">${isEdit?"✏️ Editar":"➕ Novo"} ${esc(schema.title)}</div>
           <div style="display:flex;gap:6px;align-items:center;">
-            ${(resource==="notas"||resource==="lembretes")?`<button type="button" id="sv-voz-btn" title="Inserir por voz" style="background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.3);border-radius:8px;padding:6px 12px;color:var(--green);font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font);">🎤 Voz</button>`:""}
             <button id="sv-close-form" class="btn btn-ghost btn-icon">✕</button>
           </div>
         </div>
-        ${(resource==="notas"||resource==="lembretes")?`<div id="sv-voz-status" style="display:none;font-size:12px;color:var(--green);padding:8px 10px;background:rgba(0,230,118,.06);border-radius:8px;margin-bottom:10px;text-align:center;">🎤 Ouvindo... fale o conteúdo</div>`:""}
         <form id="sv-crud-form">
           <div class="form-grid">${schema.fields.map(f=>renderField(f,itemView?.[f.key])).join("")}</div>
           ${isEdit&&resource==="mercadorias"?`
@@ -1066,10 +1064,8 @@
       },{enableHighAccuracy:true,timeout:10000});
     });
 
-    // Entrada por voz em Anotações e Lembretes
-    if(resource==="notas"||resource==="lembretes"){
-      setTimeout(()=>bindVozNoCampo(wrap),100);
-    }
+    // Voz em todos os campos de texto de qualquer formulário
+    setTimeout(()=>bindVozNoCampo(wrap),120);
 
     // Ajuste % mercadorias
     $("#sv-pct-apply")?.addEventListener("click",()=>{
@@ -1526,6 +1522,9 @@
       wrap.innerHTML=""; renderCurrent();
       toast("✅ Pedido salvo.","success");
     });
+
+    // Voz nos campos do pedido
+    setTimeout(()=>bindVozNoCampo(wrap),120);
 
     // Salvar + gerar orçamento
     $("#btn-salvar-orcamento")?.addEventListener("click",async()=>{
@@ -2237,35 +2236,104 @@
 
   // ─── Entrada por Voz (Anotações e Lembretes) ─────────────────────────────────
   function bindVozNoCampo(wrap){
-    if(!('webkitSpeechRecognition' in window)&&!('SpeechRecognition' in window)) return;
-    const textareas=wrap.querySelectorAll("textarea");
-    textareas.forEach(ta=>{
-      const btnId="btn-voz-"+ta.name;
-      const lbl=ta.closest(".field")?.querySelector("label");
-      if(!lbl||wrap.querySelector("#"+btnId)) return;
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR) return; // API não suportada
+
+    // Aplicar em inputs de texto E textareas — exceto numéricos, email, date, hidden
+    const campos=Array.from(wrap.querySelectorAll("input,textarea")).filter(el=>{
+      const t=(el.type||"text").toLowerCase();
+      return !["number","email","date","checkbox","radio","file","submit","button","hidden","search"].includes(t);
+    });
+
+    campos.forEach(campo=>{
+      const nome=campo.name||campo.id||Math.random().toString(36).slice(2);
+      const btnId="btn-voz-"+nome;
+      if(wrap.querySelector("#"+btnId)) return; // já tem botão
+
+      const lbl=campo.closest(".field")?.querySelector("label");
+      if(!lbl) return;
+
       const btn=document.createElement("button");
       btn.type="button"; btn.id=btnId;
-      btn.style.cssText="margin-left:8px;padding:3px 8px;background:rgba(68,136,255,.1);border:1px solid rgba(68,136,255,.3);border-radius:6px;color:var(--blue);font-size:11px;cursor:pointer;font-family:var(--font);";
-      btn.textContent="🎤 Voz";
-      lbl.style.display="flex"; lbl.style.alignItems="center"; lbl.style.justifyContent="space-between";
+      btn.style.cssText="margin-left:6px;padding:2px 8px;background:rgba(68,136,255,.1);border:1px solid rgba(68,136,255,.3);border-radius:6px;color:var(--blue);font-size:11px;cursor:pointer;font-family:var(--font);white-space:nowrap;flex-shrink:0;";
+      btn.textContent="🎤";
+      btn.title="Inserir por voz";
+      lbl.style.display="flex";
+      lbl.style.alignItems="center";
+      lbl.style.justifyContent="space-between";
       lbl.appendChild(btn);
-      let rec=null, gravando=false;
+
+      let rec=null, gravando=false, acumulado="";
+
+      const setEstado=(ativo)=>{
+        gravando=ativo;
+        btn.textContent=ativo?"⏹":"🎤";
+        btn.style.background=ativo?"rgba(255,82,82,.15)":"rgba(68,136,255,.1)";
+        btn.style.borderColor=ativo?"rgba(255,82,82,.4)":"rgba(68,136,255,.3)";
+        btn.style.color=ativo?"var(--red)":"var(--blue)";
+        btn.title=ativo?"Parar gravação":"Inserir por voz";
+      };
+
       btn.addEventListener("click",()=>{
-        if(gravando){rec?.stop();return;}
-        const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+        if(gravando){ rec?.stop(); return; }
+
+        acumulado=""; // reset do acumulador a cada nova sessão
         rec=new SR();
-        rec.lang="pt-BR"; rec.continuous=true; rec.interimResults=true;
-        rec.onstart=()=>{gravando=true;btn.textContent="⏹ Parar";btn.style.background="rgba(255,82,82,.15)";btn.style.borderColor="rgba(255,82,82,.4)";btn.style.color="var(--red)";};
-        rec.onend=()=>{gravando=false;btn.textContent="🎤 Voz";btn.style.background="rgba(68,136,255,.1)";btn.style.borderColor="rgba(68,136,255,.3)";btn.style.color="var(--blue)";};
-        rec.onerror=e=>{toast("Erro no reconhecimento de voz: "+e.error,"warning");rec.stop();};
-        rec.onresult=e=>{
-          let texto="";
-          for(let i=e.resultIndex;i<e.results.length;i++){
-            if(e.results[i].isFinal) texto+=e.results[i][0].transcript+" ";
-          }
-          if(texto.trim()) ta.value=(ta.value?(ta.value+" "):"")+texto.trim().toUpperCase();
+        rec.lang="pt-BR";
+        rec.continuous=true;
+        rec.interimResults=true;
+
+        rec.onstart=()=>setEstado(true);
+        rec.onend=()=>{ setEstado(false); rec=null; };
+        rec.onerror=e=>{
+          const msgs={
+            "not-allowed":"Permissão de microfone negada. Libere nas configurações do browser.",
+            "no-speech":"Nenhuma fala detectada. Tente novamente.",
+            "network":"Erro de conexão no reconhecimento de voz.",
+          };
+          toast(msgs[e.error]||"Erro de voz: "+e.error,"warning",4000);
+          rec?.stop();
         };
-        try{rec.start();}catch(e){toast("Microfone indisponível.","warning");}
+
+        rec.onresult=e=>{
+          // ── CORREÇÃO DA REPETIÇÃO ──────────────────────────────────────────
+          // Apenas processar resultados FINAIS a partir de resultIndex
+          // e acumular separadamente — nunca reler resultados já confirmados
+          let novoFinal="";
+          for(let i=e.resultIndex; i<e.results.length; i++){
+            if(e.results[i].isFinal){
+              novoFinal+=e.results[i][0].transcript;
+            }
+          }
+          if(!novoFinal) return; // só interim, ignorar
+
+          // Limpar repetições acidentais (palavra repetida 2x seguidas)
+          const limpar=txt=>txt
+            .replace(/(\b\w+\b)(\s+\1)+/gi,"$1") // remove duplicatas consecutivas
+            .replace(/\s{2,}/g," ")
+            .trim()
+            .toUpperCase();
+
+          const novoLimpo=limpar(novoFinal);
+          if(!novoLimpo) return;
+
+          acumulado+=novoLimpo+" ";
+
+          // Atualizar campo: valor original + novo acumulado
+          const base=campo.dataset.vozBase||(campo.value
+            .replace(acumulado.trim(),"")
+            .trim());
+          campo.dataset.vozBase=campo.dataset.vozBase||base;
+          campo.value=(base?(base+" "):"")+acumulado.trim();
+          campo.dispatchEvent(new Event("input",{bubbles:true}));
+        };
+
+        // Salvar base antes de começar
+        campo.dataset.vozBase=campo.value.trim();
+        acumulado="";
+
+        try{ rec.start(); }
+        catch(e){ toast("Microfone indisponível.","warning"); }
       });
     });
   }
@@ -2589,6 +2657,7 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
         toast(`✅ Visita ${isEdit?"atualizada":"registrada"}.`,"success");
       });
       setTimeout(()=>fw.scrollIntoView({behavior:"smooth",block:"start"}),60);
+      setTimeout(()=>bindVozNoCampo(fw),120);
     }
 
     // Exportar todas as visitas como CSV
