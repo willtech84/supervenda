@@ -2318,104 +2318,127 @@
   // ─── Foto de Nota/Orçamento → Cadastro Automático de Mercadorias ─────────────
   async function abrirFotoNotaMercadorias(root, rawItems){
     const wrapId="sv-foto-nota-wrap";
-    let existing=document.getElementById(wrapId);
+    const existing=document.getElementById(wrapId);
     if(existing){existing.remove();return;}
     const container=document.createElement("div");
     container.id=wrapId;
     root.querySelector(".card")?.after(container)||root.prepend(container);
 
-    const inStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;`;
     container.innerHTML=`
       <div class="card" style="border-color:rgba(0,230,118,.2);background:rgba(0,230,118,.03);">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
           <div>
             <div style="font-size:14px;font-weight:700;">📸 Importar produtos por foto</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:2px;">Foto de nota, orçamento ou tela com estoque</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px;">Nota, orçamento ou tela de estoque</div>
           </div>
           <button id="fn-fechar" class="btn btn-ghost btn-icon">✕</button>
         </div>
 
-        <label id="fn-upload-label" style="display:flex;flex-direction:column;align-items:center;gap:8px;
-          border:2px dashed var(--border-hi);border-radius:12px;padding:24px 16px;cursor:pointer;text-align:center;
-          background:var(--bg2);transition:border-color .2s;" id="fn-area">
-          <span style="font-size:36px;">📄</span>
-          <span style="font-size:14px;font-weight:600;">Toque para tirar/selecionar foto</span>
-          <span style="font-size:12px;color:var(--muted);">JPG, PNG ou PDF da nota/orçamento</span>
-          <input type="file" id="fn-file" accept="image/*,application/pdf" capture="environment" style="display:none;"/>
-        </label>
-        <div id="fn-preview" style="display:none;margin-top:10px;text-align:center;">
-          <img id="fn-img" style="max-width:100%;max-height:200px;border-radius:10px;object-fit:contain;"/>
-          <div id="fn-status" style="margin-top:8px;font-size:13px;color:var(--muted);">Pronto para analisar</div>
-          <button id="fn-analisar" class="btn btn-primary" style="margin-top:10px;width:100%;">🤖 Analisar e importar produtos</button>
+        <!-- Dois botões separados: câmera e galeria -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+          <button id="fn-btn-camera" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:18px 10px;
+            background:var(--bg2);border:2px dashed rgba(0,230,118,.4);border-radius:12px;cursor:pointer;font-family:var(--font);">
+            <span style="font-size:32px;">📷</span>
+            <span style="font-size:13px;font-weight:600;color:var(--green);">Tirar foto</span>
+            <span style="font-size:11px;color:var(--muted);">Câmera</span>
+          </button>
+          <button id="fn-btn-galeria" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:18px 10px;
+            background:var(--bg2);border:2px dashed var(--border-hi);border-radius:12px;cursor:pointer;font-family:var(--font);">
+            <span style="font-size:32px;">🖼️</span>
+            <span style="font-size:13px;font-weight:600;color:var(--text);">Selecionar</span>
+            <span style="font-size:11px;color:var(--muted);">Galeria / arquivo</span>
+          </button>
         </div>
+
+        <!-- Inputs de arquivo ocultos — separados para evitar conflito -->
+        <input type="file" id="fn-input-camera" accept="image/*" capture="environment" style="display:none;"/>
+        <input type="file" id="fn-input-galeria" accept="image/*,application/pdf" style="display:none;"/>
+
+        <!-- Preview -->
+        <div id="fn-preview" style="display:none;">
+          <img id="fn-img" style="width:100%;max-height:220px;border-radius:10px;object-fit:contain;background:#000;display:block;"/>
+          <div id="fn-nome-arquivo" style="font-size:12px;color:var(--muted);margin-top:6px;text-align:center;"></div>
+          <button id="fn-analisar" class="btn btn-primary" style="width:100%;margin-top:10px;">🤖 Analisar e importar produtos</button>
+        </div>
+
+        <div id="fn-status" style="display:none;font-size:13px;color:var(--muted);text-align:center;padding:8px 0;"></div>
         <div id="fn-resultado" style="display:none;margin-top:12px;"></div>
       </div>`;
 
     document.getElementById("fn-fechar")?.addEventListener("click",()=>container.remove());
 
-    const fileInput=document.getElementById("fn-file");
-    document.getElementById("fn-upload-label")?.addEventListener("click",()=>fileInput?.click());
     let base64Foto="", tipoFoto="image/jpeg";
 
-    fileInput?.addEventListener("change",e=>{
-      const file=e.target.files[0]; if(!file) return;
-      tipoFoto=file.type||"image/jpeg";
+    // Função que processa qualquer file selecionado
+    function processarArquivo(file){
+      if(!file) return;
+      tipoFoto=file.type&&file.type!=="application/octet-stream"?file.type:"image/jpeg";
       const reader=new FileReader();
       reader.onload=ev=>{
-        const src=ev.target.result;
-        base64Foto=src.split(",")[1];
+        const src=String(ev.target.result||"");
+        if(!src){toast("Erro ao ler arquivo.","error");return;}
+        base64Foto=src.split(",")[1]||"";
         const preview=document.getElementById("fn-preview");
         const img=document.getElementById("fn-img");
+        const nomeEl=document.getElementById("fn-nome-arquivo");
         if(preview) preview.style.display="block";
-        if(img&&tipoFoto.includes("image")) img.src=src;
-        else if(img) img.src=""; // PDF não pré-visualiza
-        document.getElementById("fn-status").textContent=`Arquivo: ${file.name} (${(file.size/1024).toFixed(0)}KB)`;
-        document.getElementById("fn-upload-label").style.borderColor="var(--green)";
+        if(img){
+          if(tipoFoto.includes("image")) img.src=src;
+          else{ img.src=""; img.style.display="none"; }
+        }
+        if(nomeEl) nomeEl.textContent=`${file.name||"foto"} · ${(file.size/1024).toFixed(0)} KB`;
       };
+      reader.onerror=()=>toast("Não foi possível ler o arquivo.","error");
       reader.readAsDataURL(file);
+    }
+
+    // Câmera: botão → input separado
+    document.getElementById("fn-btn-camera")?.addEventListener("click",()=>{
+      document.getElementById("fn-input-camera")?.click();
+    });
+    document.getElementById("fn-input-camera")?.addEventListener("change",e=>{
+      processarArquivo(e.target.files?.[0]);
+      e.target.value="";
     });
 
+    // Galeria: botão → input sem capture
+    document.getElementById("fn-btn-galeria")?.addEventListener("click",()=>{
+      document.getElementById("fn-input-galeria")?.click();
+    });
+    document.getElementById("fn-input-galeria")?.addEventListener("change",e=>{
+      processarArquivo(e.target.files?.[0]);
+      e.target.value="";
+    });
+
+    // Analisar via Worker (evita CORS)
     document.getElementById("fn-analisar")?.addEventListener("click",async()=>{
       if(!base64Foto){toast("Selecione uma imagem primeiro.","warning");return;}
       const btn=document.getElementById("fn-analisar");
-      const status=document.getElementById("fn-status");
+      const statusEl=document.getElementById("fn-status");
       btn.disabled=true; btn.textContent="⏳ Analisando...";
-      status.textContent="🤖 Claude está lendo os produtos da imagem...";
+      if(statusEl){statusEl.style.display="block";statusEl.textContent="🤖 Claude está lendo os produtos da imagem...";}
 
       try{
-        const resp=await fetch("https://api.anthropic.com/v1/messages",{
+        // Chama /api/vision no Worker — evita CORS e expõe a API key
+        const resp=await DB.request("/api/vision",{
           method:"POST",
-          headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({
-            model:"claude-sonnet-4-20250514",
-            max_tokens:2000,
-            messages:[{
-              role:"user",
-              content:[
-                {type:"image",source:{type:"base64",media_type:tipoFoto.includes("image")?tipoFoto:"image/jpeg",data:base64Foto}},
-                {type:"text",text:`Analise esta imagem (pode ser nota fiscal, orçamento, lista de estoque ou tabela de preços) e extraia todos os produtos visíveis.
-Para cada produto, retorne um JSON array com os campos: nome, codigo, marca, valor_compra, valor_venda, estoque, categoria.
-Use 0 para campos numéricos não visíveis e "" para strings não visíveis.
-Tente inferir valor_venda a partir do preço unitário listado. Se houver quantidade, use como estoque.
-Responda APENAS com o JSON array, sem explicações, sem markdown, sem backticks.
-Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_compra":0,"valor_venda":12.90,"estoque":10,"categoria":"FERRAMENTAS"}]`}
-              ]
-            }]
-          })
+          body:JSON.stringify({image:base64Foto,media_type:tipoFoto.includes("image")?tipoFoto:"image/jpeg"})
         });
-        const data=await resp.json();
-        let txt=(data?.content?.[0]?.text||"").trim().replace(/```json|```/g,"").trim();
+        let txt=String(resp?.text||"").trim().replace(/```json|```/g,"").trim();
+        if(!txt) throw new Error("Resposta vazia da IA. Tente com imagem mais nítida.");
+
         let produtos;
         try{ produtos=JSON.parse(txt); }
-        catch{ throw new Error("Não consegui extrair produtos estruturados da imagem. Tente com uma imagem mais nítida."); }
+        catch{ throw new Error("Não consegui extrair produtos estruturados. Tente com foto mais nítida e bem iluminada."); }
 
         if(!Array.isArray(produtos)||!produtos.length) throw new Error("Nenhum produto identificado na imagem.");
 
-        // Montar preview da tabela para confirmação
+        if(statusEl) statusEl.style.display="none";
+
         const resDiv=document.getElementById("fn-resultado");
         resDiv.style.display="block";
         resDiv.innerHTML=`
-          <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--green);">✅ ${produtos.length} produto${produtos.length>1?"s":""} identificado${produtos.length>1?"s":""}:</div>
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--green);">✅ ${produtos.length} produto${produtos.length!==1?"s":""} identificado${produtos.length!==1?"s":""}:</div>
           <div style="overflow-x:auto;border-radius:10px;border:1px solid var(--border);">
             <table style="width:100%;border-collapse:collapse;font-size:12px;">
               <thead><tr style="background:var(--bg3);">
@@ -2426,10 +2449,10 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
               </tr></thead>
               <tbody>
                 ${produtos.map((p,i)=>`<tr style="border-bottom:1px solid var(--border);">
-                  <td style="padding:8px;"><div style="font-weight:600;">${esc(p.nome||"")}</div><div style="font-size:11px;color:var(--muted);">${esc(p.codigo||"")}${p.marca?" · "+esc(p.marca):""}</div></td>
-                  <td style="padding:8px;text-align:right;font-weight:600;color:var(--green);">${Number(p.valor_venda||0)>0?moneyBR(p.valor_venda):"—"}</td>
+                  <td style="padding:8px;"><div style="font-weight:600;font-size:12px;">${esc(p.nome||"")}</div><div style="font-size:10px;color:var(--muted);">${esc(p.codigo||"")}${p.marca?" · "+esc(p.marca):""}</div></td>
+                  <td style="padding:8px;text-align:right;font-weight:600;color:var(--green);white-space:nowrap;">${Number(p.valor_venda||0)>0?moneyBR(p.valor_venda):"—"}</td>
                   <td style="padding:8px;text-align:right;">${p.estoque||0}</td>
-                  <td style="padding:8px;"><input type="checkbox" data-fn-idx="${i}" checked style="width:16px;height:16px;accent-color:var(--green);cursor:pointer;"/></td>
+                  <td style="padding:8px;text-align:center;"><input type="checkbox" data-fn-idx="${i}" checked style="width:16px;height:16px;accent-color:var(--green);cursor:pointer;"/></td>
                 </tr>`).join("")}
               </tbody>
             </table>
@@ -2448,13 +2471,12 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
             for(const p of selecionados){
               if(!p.nome) continue;
               const payload={
-                nome:String(p.nome).toUpperCase(), produto:String(p.nome).toUpperCase(),
-                codigo:String(p.codigo||"").toUpperCase(), sku:String(p.codigo||"").toUpperCase(),
-                marca:String(p.marca||"").toUpperCase(), categoria:String(p.categoria||"").toUpperCase(),
-                valor_compra:Number(p.valor_compra)||0, valorCompra:Number(p.valor_compra)||0,
-                valor_venda:Number(p.valor_venda)||0, valorVenda:Number(p.valor_venda)||0,
-                estoque:Number(p.estoque)||0, estoqueAtual:Number(p.estoque)||0,
-                estoqueMin:0,
+                nome:String(p.nome).toUpperCase(),produto:String(p.nome).toUpperCase(),
+                codigo:String(p.codigo||"").toUpperCase(),sku:String(p.codigo||"").toUpperCase(),
+                marca:String(p.marca||"").toUpperCase(),categoria:String(p.categoria||"").toUpperCase(),
+                valor_compra:Number(p.valor_compra)||0,valorCompra:Number(p.valor_compra)||0,
+                valor_venda:Number(p.valor_venda)||0,valorVenda:Number(p.valor_venda)||0,
+                estoque:Number(p.estoque)||0,estoqueAtual:Number(p.estoque)||0,estoqueMin:0,
               };
               try{
                 const existente=rawItems.find(m=>String(m.nome||m.produto||"").toUpperCase()===payload.nome);
@@ -2466,13 +2488,14 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
             await loadResource("mercadorias");
             container.remove();
             renderCurrent();
-            toast(`✅ ${ok} produto${ok>1?"s":""} importado${ok>1?"s":""}${erros?` · ${erros} erro(s)`:""}`,ok?"success":"warning");
+            toast(`✅ ${ok} produto${ok!==1?"s":""} importado${ok!==1?"s":""}${erros?` · ${erros} erro(s)`:""}`,ok?"success":"warning");
           },"Importando produtos...");
         });
 
       }catch(e){
-        status.textContent="❌ "+String(e?.message||"Erro ao analisar");
-        toast(String(e?.message||"Erro ao analisar"),"error",6000);
+        const msg=String(e?.message||e||"Erro ao analisar");
+        if(statusEl){statusEl.textContent="❌ "+msg;}
+        toast(msg,"error",6000);
       }
       btn.disabled=false; btn.textContent="🤖 Analisar e importar produtos";
     });
