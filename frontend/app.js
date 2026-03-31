@@ -2410,95 +2410,206 @@
       e.target.value="";
     });
 
-    // Analisar via Worker (evita CORS)
+    // Analisar com Tesseract.js (OCR gratuito no browser — sem API key)
     document.getElementById("fn-analisar")?.addEventListener("click",async()=>{
       if(!base64Foto){toast("Selecione uma imagem primeiro.","warning");return;}
       const btn=document.getElementById("fn-analisar");
       const statusEl=document.getElementById("fn-status");
-      btn.disabled=true; btn.textContent="⏳ Analisando...";
-      if(statusEl){statusEl.style.display="block";statusEl.textContent="🤖 Claude está lendo os produtos da imagem...";}
+
+      btn.disabled=true; btn.textContent="⏳ Lendo imagem...";
+      if(statusEl){statusEl.style.display="block";statusEl.textContent="📖 Carregando leitor de texto...";}
 
       try{
-        // Chama /api/vision no Worker — evita CORS e expõe a API key
-        const resp=await DB.request("/api/vision",{
-          method:"POST",
-          body:JSON.stringify({image:base64Foto,media_type:tipoFoto.includes("image")?tipoFoto:"image/jpeg"})
+        // Carregar Tesseract.js dinamicamente
+        if(!window.Tesseract){
+          await new Promise((res,rej)=>{
+            const s=document.createElement("script");
+            s.src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js";
+            s.onload=res; s.onerror=()=>rej(new Error("Falha ao carregar leitor OCR."));
+            document.head.appendChild(s);
+          });
+        }
+
+        if(statusEl) statusEl.textContent="🔍 Lendo texto da imagem... (pode levar alguns segundos)";
+
+        // Converter base64 de volta para blob para o Tesseract
+        const byteChars=atob(base64Foto);
+        const byteArr=new Uint8Array(byteChars.length);
+        for(let i=0;i<byteChars.length;i++) byteArr[i]=byteChars.charCodeAt(i);
+        const blob=new Blob([byteArr],{type:tipoFoto});
+
+        // Rodar OCR — tenta português + inglês para cobrir mais casos
+        const result=await window.Tesseract.recognize(blob,"por+eng",{
+          logger:m=>{
+            if(m.status==="recognizing text"&&statusEl){
+              statusEl.textContent=`🔍 Lendo... ${Math.round((m.progress||0)*100)}%`;
+            }
+          }
         });
-        let txt=String(resp?.text||"").trim().replace(/```json|```/g,"").trim();
-        if(!txt) throw new Error("Resposta vazia da IA. Tente com imagem mais nítida.");
 
-        let produtos;
-        try{ produtos=JSON.parse(txt); }
-        catch{ throw new Error("Não consegui extrair produtos estruturados. Tente com foto mais nítida e bem iluminada."); }
+        const textoOCR=(result?.data?.text||"").trim();
+        if(!textoOCR||textoOCR.length<10) throw new Error("Não consegui ler texto na imagem. Tente foto mais nítida e bem iluminada.");
 
-        if(!Array.isArray(produtos)||!produtos.length) throw new Error("Nenhum produto identificado na imagem.");
+        if(statusEl) statusEl.textContent="🧩 Identificando produtos...";
+
+        // Parser de texto → produtos
+        const produtos=parsearTextoProdutos(textoOCR);
+        if(!produtos.length) throw new Error("Nenhum produto identificado. Verifique se a imagem contém uma tabela ou lista de produtos.");
 
         if(statusEl) statusEl.style.display="none";
-
-        const resDiv=document.getElementById("fn-resultado");
-        resDiv.style.display="block";
-        resDiv.innerHTML=`
-          <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--green);">✅ ${produtos.length} produto${produtos.length!==1?"s":""} identificado${produtos.length!==1?"s":""}:</div>
-          <div style="overflow-x:auto;border-radius:10px;border:1px solid var(--border);">
-            <table style="width:100%;border-collapse:collapse;font-size:12px;">
-              <thead><tr style="background:var(--bg3);">
-                <th style="padding:8px;text-align:left;border-bottom:1px solid var(--border);">Produto</th>
-                <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border);">R$ Venda</th>
-                <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border);">Estoque</th>
-                <th style="padding:8px;border-bottom:1px solid var(--border);"></th>
-              </tr></thead>
-              <tbody>
-                ${produtos.map((p,i)=>`<tr style="border-bottom:1px solid var(--border);">
-                  <td style="padding:8px;"><div style="font-weight:600;font-size:12px;">${esc(p.nome||"")}</div><div style="font-size:10px;color:var(--muted);">${esc(p.codigo||"")}${p.marca?" · "+esc(p.marca):""}</div></td>
-                  <td style="padding:8px;text-align:right;font-weight:600;color:var(--green);white-space:nowrap;">${Number(p.valor_venda||0)>0?moneyBR(p.valor_venda):"—"}</td>
-                  <td style="padding:8px;text-align:right;">${p.estoque||0}</td>
-                  <td style="padding:8px;text-align:center;"><input type="checkbox" data-fn-idx="${i}" checked style="width:16px;height:16px;accent-color:var(--green);cursor:pointer;"/></td>
-                </tr>`).join("")}
-              </tbody>
-            </table>
-          </div>
-          <div style="display:flex;gap:8px;margin-top:10px;">
-            <button id="fn-importar-sel" class="btn btn-primary" style="flex:1;">💾 Importar selecionados</button>
-            <button id="fn-cancelar-import" class="btn btn-ghost" style="width:auto;">Cancelar</button>
-          </div>`;
-
-        document.getElementById("fn-cancelar-import")?.addEventListener("click",()=>{resDiv.style.display="none";});
-        document.getElementById("fn-importar-sel")?.addEventListener("click",async()=>{
-          const selecionados=produtos.filter((_,i)=>resDiv.querySelector(`[data-fn-idx="${i}"]`)?.checked);
-          if(!selecionados.length){toast("Selecione ao menos um produto.","warning");return;}
-          await runWithUi(async()=>{
-            let ok=0,erros=0;
-            for(const p of selecionados){
-              if(!p.nome) continue;
-              const payload={
-                nome:String(p.nome).toUpperCase(),produto:String(p.nome).toUpperCase(),
-                codigo:String(p.codigo||"").toUpperCase(),sku:String(p.codigo||"").toUpperCase(),
-                marca:String(p.marca||"").toUpperCase(),categoria:String(p.categoria||"").toUpperCase(),
-                valor_compra:Number(p.valor_compra)||0,valorCompra:Number(p.valor_compra)||0,
-                valor_venda:Number(p.valor_venda)||0,valorVenda:Number(p.valor_venda)||0,
-                estoque:Number(p.estoque)||0,estoqueAtual:Number(p.estoque)||0,estoqueMin:0,
-              };
-              try{
-                const existente=rawItems.find(m=>String(m.nome||m.produto||"").toUpperCase()===payload.nome);
-                if(existente) await DB.update("mercadorias",getId(existente),payload);
-                else await DB.create("mercadorias",payload);
-                ok++;
-              }catch{erros++;}
-            }
-            await loadResource("mercadorias");
-            container.remove();
-            renderCurrent();
-            toast(`✅ ${ok} produto${ok!==1?"s":""} importado${ok!==1?"s":""}${erros?` · ${erros} erro(s)`:""}`,ok?"success":"warning");
-          },"Importando produtos...");
-        });
+        mostrarTabelaResultado(produtos);
 
       }catch(e){
-        const msg=String(e?.message||e||"Erro ao analisar");
+        const msg=String(e?.message||"Erro ao processar imagem");
         if(statusEl){statusEl.textContent="❌ "+msg;}
         toast(msg,"error",6000);
       }
       btn.disabled=false; btn.textContent="🤖 Analisar e importar produtos";
     });
+
+    // ── Parser de texto OCR → array de produtos ──────────────────────────────
+    function parsearTextoProdutos(texto){
+      const linhas=texto.split("\n").map(l=>l.trim()).filter(l=>l.length>2);
+      const produtos=[];
+
+      // Regex para detectar valores monetários (ex: 12,90 / 1.290,00 / R$ 45.00)
+      const rePreco=/(?:R\$\s*)?(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2}))/g;
+      // Regex para código alfanumérico (ex: AB-1234, CHV5, 7891234567890)
+      const reCodigo=/\b([A-Z]{1,4}[-.]?\d{3,}|\d{7,14}|[A-Z0-9]{3,10})\b/;
+
+      for(const linha of linhas){
+        // Pular linhas que parecem cabeçalho ou são muito curtas
+        if(/^(produto|descrição|item|código|cód|ref|qtd|quant|preço|valor|unit|total|marca|obs|data|nf|nota|empresa|cnpj|cpf)$/i.test(linha)) continue;
+        if(linha.length<4) continue;
+
+        // Extrair todos os valores monetários da linha
+        const precos=[...linha.matchAll(rePreco)].map(m=>{
+          const s=m[1].replace(/\./g,"").replace(",",".");
+          return parseFloat(s)||0;
+        }).filter(v=>v>0&&v<999999);
+
+        if(!precos.length) continue; // linha sem preço = provavelmente não é produto
+
+        // Preço de venda = maior valor razoável (ou único)
+        const valorVenda=precos.length>1?Math.max(...precos):precos[0];
+        const valorCompra=precos.length>1?Math.min(...precos):0;
+
+        // Remover números/preços do texto para sobrar o nome
+        const semPrecos=linha
+          .replace(/R\$\s*[\d.,]+/g,"")
+          .replace(/\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})\b/g,"")
+          .replace(/\b\d+\b/g," ")
+          .replace(/[|;:]/g," ")
+          .replace(/\s{2,}/g," ")
+          .trim()
+          .toUpperCase();
+
+        if(semPrecos.length<3) continue;
+
+        // Extrair código se houver
+        const codMatch=semPrecos.match(reCodigo);
+        const codigo=codMatch?codMatch[1]:"";
+        const nome=semPrecos.replace(codigo,"").trim().replace(/^[-–\s]+/,"").trim();
+
+        if(nome.length<3) continue;
+
+        // Tentar extrair quantidade (número antes de "un", "pc", "cx" etc.)
+        const qtdMatch=linha.match(/(\d+)\s*(?:un|pc|pç|cx|kg|m\b)/i);
+        const estoque=qtdMatch?Number(qtdMatch[1]):0;
+
+        produtos.push({
+          nome:nome.slice(0,80),
+          codigo,
+          marca:"",
+          categoria:"",
+          valor_compra:valorCompra,
+          valor_venda:valorVenda,
+          estoque,
+        });
+      }
+
+      // Remover duplicatas por nome similar
+      const vistos=new Set();
+      return produtos.filter(p=>{
+        const chave=p.nome.slice(0,20);
+        if(vistos.has(chave)) return false;
+        vistos.add(chave);
+        return true;
+      }).slice(0,50); // máximo 50 produtos por foto
+    }
+
+    // ── Mostrar tabela de confirmação ─────────────────────────────────────────
+    function mostrarTabelaResultado(produtos){
+      const resDiv=document.getElementById("fn-resultado");
+      resDiv.style.display="block";
+      resDiv.innerHTML=`
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--green);">
+          ✅ ${produtos.length} produto${produtos.length!==1?"s":""} identificado${produtos.length!==1?"s":""}
+          <span style="font-weight:400;color:var(--muted);font-size:11px;"> — revise antes de importar</span>
+        </div>
+        <div style="overflow-x:auto;border-radius:10px;border:1px solid var(--border);">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;">
+            <thead><tr style="background:var(--bg3);">
+              <th style="padding:8px;text-align:left;border-bottom:1px solid var(--border);">Produto</th>
+              <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border);">R$ Venda</th>
+              <th style="padding:8px;text-align:right;border-bottom:1px solid var(--border);">Qtd</th>
+              <th style="padding:8px;border-bottom:1px solid var(--border);text-align:center;">✓</th>
+            </tr></thead>
+            <tbody>
+              ${produtos.map((p,i)=>`<tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:8px;">
+                  <div style="font-weight:600;font-size:12px;">${esc(p.nome)}</div>
+                  ${p.codigo?`<div style="font-size:10px;color:var(--muted);">${esc(p.codigo)}</div>`:""}
+                </td>
+                <td style="padding:8px;text-align:right;font-weight:600;color:var(--green);white-space:nowrap;">
+                  ${p.valor_venda>0?moneyBR(p.valor_venda):"—"}
+                </td>
+                <td style="padding:8px;text-align:right;">${p.estoque||"—"}</td>
+                <td style="padding:8px;text-align:center;">
+                  <input type="checkbox" data-fn-idx="${i}" checked style="width:16px;height:16px;accent-color:var(--green);cursor:pointer;"/>
+                </td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:var(--muted);">
+          💡 O OCR pode cometer erros — revise nomes e preços antes de importar.
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button id="fn-importar-sel" class="btn btn-primary" style="flex:1;">💾 Importar selecionados</button>
+          <button id="fn-cancelar-import" class="btn btn-ghost" style="width:auto;">Cancelar</button>
+        </div>`;
+
+      document.getElementById("fn-cancelar-import")?.addEventListener("click",()=>{resDiv.style.display="none";});
+      document.getElementById("fn-importar-sel")?.addEventListener("click",async()=>{
+        const selecionados=produtos.filter((_,i)=>resDiv.querySelector(`[data-fn-idx="${i}"]`)?.checked);
+        if(!selecionados.length){toast("Selecione ao menos um produto.","warning");return;}
+        await runWithUi(async()=>{
+          let ok=0,erros=0;
+          for(const p of selecionados){
+            if(!p.nome) continue;
+            const payload={
+              nome:p.nome.toUpperCase(),produto:p.nome.toUpperCase(),
+              codigo:String(p.codigo||"").toUpperCase(),sku:String(p.codigo||"").toUpperCase(),
+              marca:"",categoria:"",
+              valor_compra:Number(p.valor_compra)||0,valorCompra:Number(p.valor_compra)||0,
+              valor_venda:Number(p.valor_venda)||0,valorVenda:Number(p.valor_venda)||0,
+              estoque:Number(p.estoque)||0,estoqueAtual:Number(p.estoque)||0,estoqueMin:0,
+            };
+            try{
+              const existente=rawItems.find(m=>String(m.nome||m.produto||"").toUpperCase()===payload.nome);
+              if(existente) await DB.update("mercadorias",getId(existente),payload);
+              else await DB.create("mercadorias",payload);
+              ok++;
+            }catch{erros++;}
+          }
+          await loadResource("mercadorias");
+          container.remove();
+          renderCurrent();
+          toast(`✅ ${ok} produto${ok!==1?"s":""} importado${ok!==1?"s":""}${erros?` · ${erros} erro(s)`:""}`,ok?"success":"warning");
+        },"Importando produtos...");
+      });
+    }
   }
 
   // ─── Aba Visitas ─────────────────────────────────────────────────────────────
