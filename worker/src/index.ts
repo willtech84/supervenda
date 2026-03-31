@@ -3,6 +3,7 @@ export interface Env {
   BACKUPS?: R2Bucket;
   DOCS?: R2Bucket;
   JWT_SECRET: string;
+  ANTHROPIC_API_KEY?: string;
 }
 
 /** -------------------- CORS + helpers -------------------- **/
@@ -1219,6 +1220,54 @@ export default {
           await logAtividade("excluir", "docs", `Doc excluído: ${doc.nome}`);
           return json({ ok: true });
         }
+      }
+
+      /** =================== VISION / OCR via Claude =================== **/
+      if (p[1] === "vision" && req.method === "POST") {
+        if (!env.ANTHROPIC_API_KEY) {
+          return bad("ANTHROPIC_API_KEY não configurada no Worker. Adicione como secret no Cloudflare Dashboard.", 503);
+        }
+
+        const body = await readJson<{ image: string; media_type?: string; prompt?: string }>(req);
+        if (!body.image) return bad("Campo 'image' (base64) obrigatório.", 400);
+
+        const mediaType = body.media_type || "image/jpeg";
+        const prompt = body.prompt ||
+          `Analise esta imagem (nota fiscal, orçamento, lista de estoque ou tabela de preços) e extraia todos os produtos visíveis.
+Para cada produto retorne um JSON array com: nome, codigo, marca, valor_compra, valor_venda, estoque, categoria.
+Use 0 para numéricos não visíveis e "" para strings não visíveis.
+Infira valor_venda do preço unitário. Se houver quantidade, use como estoque.
+Responda APENAS com o JSON array, sem explicações, sem markdown, sem backticks.
+Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_compra":0,"valor_venda":12.90,"estoque":10,"categoria":"FERRAMENTAS"}]`;
+
+        const aiResp = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": env.ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: "claude-opus-4-5",
+            max_tokens: 2048,
+            messages: [{
+              role: "user",
+              content: [
+                { type: "image", source: { type: "base64", media_type: mediaType, data: body.image } },
+                { type: "text", text: prompt }
+              ]
+            }]
+          })
+        });
+
+        if (!aiResp.ok) {
+          const errText = await aiResp.text();
+          return bad("Erro na API Claude: " + errText.slice(0, 200), aiResp.status);
+        }
+
+        const aiData = await aiResp.json() as any;
+        const text = aiData?.content?.[0]?.text || "";
+        return json({ text });
       }
 
       return bad("Not found", 404);
