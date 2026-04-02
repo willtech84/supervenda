@@ -2472,53 +2472,132 @@
       const linhas=texto.split("\n").map(l=>l.trim()).filter(l=>l.length>2);
       const produtos=[];
 
-      // Regex para detectar valores monetários (ex: 12,90 / 1.290,00 / R$ 45.00)
-      const rePreco=/(?:R\$\s*)?(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2}))/g;
-      // Regex para código alfanumérico (ex: AB-1234, CHV5, 7891234567890)
-      const reCodigo=/\b([A-Z]{1,4}[-.]?\d{3,}|\d{7,14}|[A-Z0-9]{3,10})\b/;
+      // Regex auxiliares
+      const reNumero=/\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})\b|\b\d+[.,]\d{2}\b/g;
+      const reSoNumero=/^\d+([.,]\d+)?$/;
+      const reCodigoInicio=/^(\d{3,8})\s+/; // código numérico no início da linha
 
-      for(const linha of linhas){
-        // Pular linhas que parecem cabeçalho ou são muito curtas
-        if(/^(produto|descrição|item|código|cód|ref|qtd|quant|preço|valor|unit|total|marca|obs|data|nf|nota|empresa|cnpj|cpf)$/i.test(linha)) continue;
-        if(linha.length<4) continue;
+      // Detectar se é tabela estruturada (tem cabeçalho com palavras típicas)
+      const textoUpper=texto.toUpperCase();
+      const temCabecalho=/(CÓDIGO|DESCRI|UNITÁRIO|UNIT|QUANT|TOTAL|PRECO|VALOR)/i.test(textoUpper);
 
-        // Extrair todos os valores monetários da linha
-        const precos=[...linha.matchAll(rePreco)].map(m=>{
-          const s=m[1].replace(/\./g,"").replace(",",".");
+      // Palavras de cabeçalho para ignorar
+      const reIgnorar=/^(código|codigo|descri|emb|embalagem|cf\s?ncm|ncm|um|unid|quant|qtd|unitário|unitario|unit|total|preco|valor|marca|categoria|item|ref|referência|produto|tipo|obs|data|nf|nota|empresa|cnpj|cpf|ie|fone|end|rua|bairro|cidade|uf|cep|fax)\b/i;
+
+      // Juntar linhas quebradas: se uma linha não tem número, provavelmente continua a anterior
+      const linhasJuntas=[];
+      for(let i=0;i<linhas.length;i++){
+        const l=linhas[i];
+        if(reIgnorar.test(l)){linhasJuntas.push({texto:l,ignorar:true});continue;}
+        // Linha começa com número (provável código de produto) → nova entrada
+        if(reCodigoInicio.test(l)){
+          linhasJuntas.push({texto:l,ignorar:false});
+        } else if(linhasJuntas.length>0&&!linhasJuntas[linhasJuntas.length-1].ignorar){
+          // Continuação da linha anterior (descrição quebrada em 2 linhas)
+          linhasJuntas[linhasJuntas.length-1].texto+=" "+l;
+        } else {
+          linhasJuntas.push({texto:l,ignorar:false});
+        }
+      }
+
+      for(const entrada of linhasJuntas){
+        if(entrada.ignorar) continue;
+        const linha=entrada.texto;
+
+        // Extrair todos os valores numéricos da linha
+        const numeros=[...linha.matchAll(reNumero)].map(m=>{
+          const s=m[0].replace(/\./g,"").replace(",",".");
           return parseFloat(s)||0;
-        }).filter(v=>v>0&&v<999999);
+        }).filter(v=>v>0);
 
-        if(!precos.length) continue; // linha sem preço = provavelmente não é produto
+        if(!numeros.length) continue;
 
-        // Preço de venda = maior valor razoável (ou único)
-        const valorVenda=precos.length>1?Math.max(...precos):precos[0];
-        const valorCompra=precos.length>1?Math.min(...precos):0;
+        // ── Estratégia de colunas ─────────────────────────────────────────────
+        // Tabelas típicas: Código | Descrição | ... | Quant | Unitário | Total
+        // O TOTAL é sempre o último número, UNITÁRIO é o penúltimo
+        // A QUANTIDADE fica antes, mas geralmente é inteiro pequeno (< 10000)
+        let valorVenda=0, valorCompra=0, estoque=0;
 
-        // Remover números/preços do texto para sobrar o nome
-        const semPrecos=linha
-          .replace(/R\$\s*[\d.,]+/g,"")
-          .replace(/\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})\b/g,"")
-          .replace(/\b\d+\b/g," ")
-          .replace(/[|;:]/g," ")
-          .replace(/\s{2,}/g," ")
-          .trim()
-          .toUpperCase();
+        if(numeros.length>=3){
+          // Tem pelo menos 3 números: [... , quant, unitario, total]
+          const total=numeros[numeros.length-1];
+          const unitario=numeros[numeros.length-2];
+          const quantCandidato=numeros[numeros.length-3];
 
-        if(semPrecos.length<3) continue;
+          // Validar: unitario * quant ≈ total (tolerância 5%)
+          if(quantCandidato>0&&Math.abs(unitario*quantCandidato-total)/total<0.05){
+            valorVenda=unitario;
+            estoque=Math.round(quantCandidato);
+          } else if(Math.abs(unitario*1-total)/total<0.05){
+            // quantidade = 1
+            valorVenda=unitario;
+            estoque=1;
+          } else {
+            // Não conseguiu validar — usar penúltimo como venda
+            valorVenda=unitario;
+          }
+        } else if(numeros.length===2){
+          // Dois números: provável [unitario, total] ou [quant, total]
+          const [a,b]=numeros;
+          if(a>0&&Math.abs(a-b)/b<0.01){
+            // São iguais → qty=1
+            valorVenda=a; estoque=1;
+          } else if(b>a&&b/a===Math.round(b/a)){
+            // b divisível por a → a=unitario, b=total
+            valorVenda=a; estoque=Math.round(b/a);
+          } else {
+            valorVenda=a>1?a:b;
+          }
+        } else {
+          valorVenda=numeros[0];
+        }
 
-        // Extrair código se houver
-        const codMatch=semPrecos.match(reCodigo);
+        // ── Extrair código (primeiro token numérico do início) ────────────────
+        const codMatch=linha.match(reCodigoInicio);
         const codigo=codMatch?codMatch[1]:"";
-        const nome=semPrecos.replace(codigo,"").trim().replace(/^[-–\s]+/,"").trim();
 
-        if(nome.length<3) continue;
+        // ── Extrair descrição (texto entre código e os números finais) ─────────
+        let descricao=linha;
+        // Remover código do início
+        if(codigo) descricao=descricao.replace(reCodigoInicio,"").trim();
+        // Remover os números do final (Total, Unitário, Quant, UM, NCM)
+        // Estratégia: remover tokens que são só números a partir de certa posição
+        const tokens=descricao.split(/\s+/);
+        let fimDesc=tokens.length;
+        let removidos=0;
+        for(let i=tokens.length-1;i>=0;i--){
+          const t=tokens[i].replace(",",".");
+          if(reSoNumero.test(t)||/^(KG|PC|UN|MT|CX|LT|GL|RL|SC|M2|M3|KIT)$/i.test(t)||/^\d{2,}\d*$/.test(tokens[i])){
+            fimDesc=i;
+            removidos++;
+            if(removidos>=4) break; // remover no máximo 4 tokens do final
+          } else {
+            break;
+          }
+        }
+        // Remover também o embalagem (número logo após código, antes da descrição)
+        let descTokens=tokens.slice(0,fimDesc);
+        if(descTokens.length>0&&/^\d{1,3}$/.test(descTokens[0])) descTokens=descTokens.slice(1);
 
-        // Tentar extrair quantidade (número antes de "un", "pc", "cx" etc.)
-        const qtdMatch=linha.match(/(\d+)\s*(?:un|pc|pç|cx|kg|m\b)/i);
-        const estoque=qtdMatch?Number(qtdMatch[1]):0;
+        descricao=descTokens.join(" ").toUpperCase().trim();
+
+        // Limpar artefatos OCR comuns: pontos no início, espaços múltiplos
+        // Remover sequências NCM (8 dígitos seguidos) e tokens só-numéricos soltos
+        descricao=descricao
+          .replace(/\b\d{8}\b/g,"")       // NCM de 8 dígitos
+          .replace(/\b\d{6,}\b/g,"")      // qualquer sequência >= 6 dígitos
+          .replace(/\b\d{1,3}\s+\d{8}\b/g,"") // "117 72292000" tipo CF NCM
+          .replace(/^[.\-\s0-9]+/,"")     // lixo no início
+          .replace(/\s{2,}/g," ")
+          .trim();
+
+        if(descricao.length<3) continue;
+        if(valorVenda<=0&&estoque<=0) continue;
+        // Ignorar linhas onde o nome parece ser só números/NCM
+        if(/^\d+$/.test(descricao.replace(/\s/g,""))) continue;
 
         produtos.push({
-          nome:nome.slice(0,80),
+          nome:descricao.slice(0,80),
           codigo,
           marca:"",
           categoria:"",
@@ -2528,14 +2607,14 @@
         });
       }
 
-      // Remover duplicatas por nome similar
+      // Remover duplicatas por nome
       const vistos=new Set();
       return produtos.filter(p=>{
-        const chave=p.nome.slice(0,20);
+        const chave=p.nome.slice(0,25).toUpperCase();
         if(vistos.has(chave)) return false;
         vistos.add(chave);
         return true;
-      }).slice(0,50); // máximo 50 produtos por foto
+      }).slice(0,60);
     }
 
     // ── Mostrar tabela de confirmação ─────────────────────────────────────────
