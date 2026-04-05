@@ -2734,12 +2734,22 @@
 
   // ─── Porta-Cartão de Visitas ──────────────────────────────────────────────────
   async function renderCartoes(root){
-    function loadCartoes(){try{return JSON.parse(localStorage.getItem("sv_cartoes")||"[]");}catch{return[];}}
-    function saveCartoes(v){try{localStorage.setItem("sv_cartoes",JSON.stringify(v));}catch{}}
-    let cartoes=loadCartoes();
+    // ── Sempre ler/escrever direto no localStorage — sem closure stale ─────────
+    const KEY="sv_cartoes";
+    const lerCartoes=()=>{try{return JSON.parse(localStorage.getItem(KEY)||"[]");}catch{return[];}};
+    const gravarCartoes=v=>{try{localStorage.setItem(KEY,JSON.stringify(v));}catch{}};
+
+    function atualizarContador(){
+      const el=document.getElementById("sv-cart-count");
+      if(!el) return;
+      const n=lerCartoes().length;
+      el.textContent=`${n} cartão${n!==1?"ões":""} cadastrado${n!==1?"s":""}`;
+    }
 
     function renderLista(){
       const lista=document.getElementById("sv-cart-lista"); if(!lista) return;
+      const cartoes=lerCartoes(); // ← sempre fresco do localStorage
+      atualizarContador();
       const q=(document.getElementById("sv-cart-busca")?.value||"").trim().toLowerCase();
       const filtrados=q?cartoes.filter(c=>
         String(c.nome||"").toLowerCase().includes(q)||
@@ -2777,11 +2787,11 @@
       // Exportar para cliente
       lista.querySelectorAll("[data-cart-cli]").forEach(btn=>{
         btn.addEventListener("click",()=>{
-          const c=cartoes.find(x=>x._id===btn.getAttribute("data-cart-cli")); if(!c) return;
+          const id=btn.getAttribute("data-cart-cli");
+          const c=lerCartoes().find(x=>x._id===id); // ← ler fresh
+          if(!c) return;
           if(!confirm(`Exportar "${c.nome}" para o cadastro de Clientes?`)) return;
           navigate("clientes");
-
-          // Aguardar navegação + renderForm + bindAutocomplete + aplicarMascaras
           setTimeout(()=>{
             renderForm("clientes",null);
             setTimeout(()=>{
@@ -2791,11 +2801,7 @@
                 if(!el) return;
                 el.value=upper?String(val).toUpperCase():String(val);
               };
-
-              // Nome do cliente = empresa (nome pessoal vai pra obs)
               set("nome",    c.empresa||c.nome);
-
-              // Telefone: formatar aqui mesmo sem depender da máscara
               const d=String(c.telefone||"").replace(/\D/g,"").slice(0,11);
               if(d){
                 let tel=d;
@@ -2804,30 +2810,35 @@
                 const el=document.querySelector("#sv-form-wrap [name='telefone']");
                 if(el) el.value=tel;
               }
-
-              set("email",    c.email,    false); // email não maiúsculo
-              set("endereco", c.endereco);
-
-              // obs = nome pessoal + cargo (contexto do contato)
+              set("email",   c.email, false);
+              set("endereco",c.endereco);
               const obsVal=[c.nome,c.cargo].filter(Boolean).join(" — ");
               set("obs", obsVal);
-
               document.querySelector("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"});
-            },350); // aguarda form + máscaras estarem prontos
+            },350);
           },120);
         });
       });
+
+      // Editar
       lista.querySelectorAll("[data-cart-edit]").forEach(btn=>{
         btn.addEventListener("click",()=>{
-          const c=cartoes.find(x=>x._id===btn.getAttribute("data-cart-edit")); if(!c) return;
+          const id=btn.getAttribute("data-cart-edit");
+          const c=lerCartoes().find(x=>x._id===id); // ← ler fresh
+          if(!c) return;
           renderFormCartao(c);
         });
       });
+
+      // Excluir
       lista.querySelectorAll("[data-cart-del]").forEach(btn=>{
         btn.addEventListener("click",()=>{
-          if(!confirm("Excluir este cartão?")) return;
-          cartoes=cartoes.filter(x=>x._id!==btn.getAttribute("data-cart-del"));
-          saveCartoes(cartoes); renderLista(); toast("Cartão excluído.","info");
+          const id=btn.getAttribute("data-cart-del");
+          const c=lerCartoes().find(x=>x._id===id);
+          if(!confirm(`Excluir o cartão "${c?.nome||""}"?`)) return;
+          gravarCartoes(lerCartoes().filter(x=>x._id!==id)); // ← ler, filtrar, gravar
+          renderLista();
+          toast("Cartão excluído.","info");
         });
       });
     }
@@ -2842,8 +2853,6 @@
             <div style="font-size:15px;font-weight:600;">${isEdit?"✏️ Editar":"📷 Novo"} cartão</div>
             <button id="cart-fechar" class="btn btn-ghost btn-icon">✕</button>
           </div>
-
-          <!-- Foto do cartão -->
           <div style="margin-bottom:14px;">
             <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;">FOTO DO CARTÃO</div>
             <div style="display:flex;gap:10px;margin-bottom:10px;">
@@ -2858,7 +2867,6 @@
               <div id="cart-ocr-status" style="display:none;font-size:12px;color:var(--muted);margin-top:6px;text-align:center;"></div>
             </div>
           </div>
-
           <div class="form-grid">
             <div class="field"><label>Nome *</label><input id="cart-nome" type="text" value="${esc(item?.nome||"")}" placeholder="NOME COMPLETO" style="${inStyle}"/></div>
             <div class="field"><label>Cargo / Função</label><input id="cart-cargo" type="text" value="${esc(item?.cargo||"")}" placeholder="VENDEDOR, GERENTE..." style="${inStyle}"/></div>
@@ -2880,7 +2888,6 @@
       document.getElementById("cart-fechar")?.addEventListener("click",()=>{fw.innerHTML="";});
       document.getElementById("cart-cancelar")?.addEventListener("click",()=>{fw.innerHTML="";});
 
-      // Foto
       let fotoDataUrl=item?.foto||"";
       const mostrarPreview=(src)=>{
         fotoDataUrl=src;
@@ -2900,7 +2907,7 @@
       document.getElementById("cart-input-camera")?.addEventListener("change",e=>{processarFotoCartao(e.target.files?.[0]);e.target.value="";});
       document.getElementById("cart-input-galeria")?.addEventListener("change",e=>{processarFotoCartao(e.target.files?.[0]);e.target.value="";});
 
-      // OCR Tesseract para ler dados do cartão
+      // OCR Tesseract
       document.getElementById("cart-ocr-btn")?.addEventListener("click",async()=>{
         if(!fotoDataUrl){toast("Adicione uma foto do cartão primeiro.","warning");return;}
         const btn=document.getElementById("cart-ocr-btn");
@@ -2917,7 +2924,6 @@
             });
           }
           if(statusEl) statusEl.textContent="Lendo texto do cartão...";
-          // Converter dataUrl para blob
           const base64=fotoDataUrl.split(",")[1];
           const bytes=atob(base64); const arr=new Uint8Array(bytes.length);
           for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
@@ -2927,36 +2933,24 @@
           });
           const txt=(result?.data?.text||"").trim();
           if(!txt) throw new Error("Não consegui ler texto no cartão.");
-
-          // Parser de cartão de visita
           const linhas=txt.split("\n").map(l=>l.trim()).filter(l=>l.length>2);
           const reEmail=/[\w.+-]+@[\w-]+\.[a-z]{2,}/i;
           const reTel=/(?:\+55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{4}[-.\s]?\d{4}/;
-          const reSite=/(?:www\.)?[\w-]+\.(com|com\.br|net|org|br)\b/i;
-
-          let nome="",cargo="",empresa="",telefone="",email="",site="",endereco="";
+          let nome="",cargo="",empresa="",telefone="",email="",endereco="";
           for(const linha of linhas){
             const em=linha.match(reEmail); if(em&&!email){email=em[0];continue;}
             const te=linha.match(reTel); if(te&&!telefone){telefone=te[0];continue;}
-            const si=linha.match(reSite); if(si&&!site){site=si[0];continue;}
-            // Cargo/função: palavras-chave típicas
             if(!cargo&&/\b(gerente|diretor|vendedor|representante|coord|analista|engenheir|técnico|socio|sócio|proprietário|ceo|cfo|cto|supervisor|consultor)\b/i.test(linha)){cargo=linha;continue;}
-            // Nome: linhas em maiúscula sem números geralmente
             if(!nome&&/^[A-ZÀ-Ú][a-zà-ú]/.test(linha)&&!/\d/.test(linha)&&linha.split(" ").length>=2){nome=linha;continue;}
-            // Empresa: geralmente nome em caps ou com ltda/me/sa
             if(!empresa&&(/LTDA|EIRELI|S\.A\.|EPP|ME\b/i.test(linha)||linha===linha.toUpperCase()&&linha.length>4)){empresa=linha;continue;}
-            // Endereço
             if(!endereco&&/\b(rua|av|avenida|estrada|rod|rodovia|r\.|al\.|alameda)\b/i.test(linha)){endereco=linha;continue;}
           }
-
-          // Preencher campos
           if(nome) document.getElementById("cart-nome").value=nome.toUpperCase();
           if(cargo) document.getElementById("cart-cargo").value=cargo.toUpperCase();
           if(empresa) document.getElementById("cart-empresa").value=empresa.toUpperCase();
           if(telefone) document.getElementById("cart-tel").value=telefone;
           if(email) document.getElementById("cart-email").value=email.toLowerCase();
           if(endereco) document.getElementById("cart-end").value=endereco.toUpperCase();
-
           if(statusEl) statusEl.style.display="none";
           toast("✅ Dados extraídos! Revise antes de salvar.","success");
         }catch(e){
@@ -2974,25 +2968,30 @@
         e.target.value=v.replace(/-$/,"");
       });
 
-      // Salvar
+      // Salvar — sempre ler e gravar do localStorage
       document.getElementById("cart-salvar")?.addEventListener("click",()=>{
         const nome=document.getElementById("cart-nome")?.value?.trim()?.toUpperCase();
         if(!nome){toast("Nome é obrigatório.","warning");return;}
         const novo={
           _id:item?._id||("C"+Date.now()),
           nome,
-          cargo:document.getElementById("cart-cargo")?.value?.trim()?.toUpperCase()||"",
-          empresa:document.getElementById("cart-empresa")?.value?.trim()?.toUpperCase()||"",
-          telefone:document.getElementById("cart-tel")?.value?.trim()||"",
-          email:document.getElementById("cart-email")?.value?.trim()?.toLowerCase()||"",
-          endereco:document.getElementById("cart-end")?.value?.trim()?.toUpperCase()||"",
-          obs:document.getElementById("cart-obs")?.value?.trim()?.toUpperCase()||"",
-          foto:fotoDataUrl||"",
-          data:new Date().toISOString().slice(0,10),
+          cargo: document.getElementById("cart-cargo")?.value?.trim()?.toUpperCase()||"",
+          empresa: document.getElementById("cart-empresa")?.value?.trim()?.toUpperCase()||"",
+          telefone: document.getElementById("cart-tel")?.value?.trim()||"",
+          email: document.getElementById("cart-email")?.value?.trim()?.toLowerCase()||"",
+          endereco: document.getElementById("cart-end")?.value?.trim()?.toUpperCase()||"",
+          obs: document.getElementById("cart-obs")?.value?.trim()?.toUpperCase()||"",
+          foto: fotoDataUrl||"",
+          data: new Date().toISOString().slice(0,10),
         };
-        if(isEdit) cartoes=cartoes.map(x=>x._id===item._id?novo:x);
-        else cartoes.unshift(novo);
-        saveCartoes(cartoes); fw.innerHTML=""; renderLista();
+        // ← Ler lista atual do localStorage antes de inserir/editar
+        const atual=lerCartoes();
+        const nova=isEdit
+          ? atual.map(x=>x._id===item._id?novo:x)
+          : [novo,...atual]; // novo sempre no início
+        gravarCartoes(nova);
+        fw.innerHTML="";
+        renderLista();
         toast(`✅ Cartão ${isEdit?"atualizado":"cadastrado"}.`,"success");
       });
     }
@@ -3008,7 +3007,7 @@
           <span class="search-icon">🔍</span>
           <input id="sv-cart-busca" type="search" placeholder="Buscar por nome, empresa..." autocomplete="off"/>
         </div>
-        <div style="margin-top:6px;font-size:12px;color:var(--muted);">${cartoes.length} cartão${cartoes.length!==1?"ões":""} cadastrado${cartoes.length!==1?"s":""}</div>
+        <div id="sv-cart-count" style="margin-top:6px;font-size:12px;color:var(--muted);"></div>
       </div>
       <div id="sv-cart-form"></div>
       <div id="sv-cart-lista"></div>`;
@@ -3017,6 +3016,7 @@
     document.getElementById("cart-novo-btn")?.addEventListener("click",()=>renderFormCartao(null));
     document.getElementById("sv-cart-busca")?.addEventListener("input",renderLista);
   }
+
 
   // ─── Aba Visitas ─────────────────────────────────────────────────────────────
   async function renderVisitas(root){
