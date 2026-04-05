@@ -64,6 +64,7 @@
     {id:"relatorios",  label:"Relatórios",  icon:"📈"},
     {id:"manuais",     label:"Manuais",     icon:"📚"},
     {id:"visitas",     label:"Visitas",     icon:"🏢"},
+    {id:"cartao",      label:"Cartões",     icon:"🪪"},
     {id:"rotas",       label:"Rotas",       icon:"🗺️", resource:"rotas"},
     {id:"despesas",    label:"Despesas",    icon:"💸", resource:"despesas"},
     {id:"lembretes",   label:"Lembretes",   icon:"🔔", resource:"lembretes"},
@@ -488,6 +489,7 @@
     }
     if(route.id==="manuais"){renderManuais(root);return;}
     if(route.id==="visitas"){renderVisitas(root);return;}
+    if(route.id==="cartao"){renderCartoes(root);return;}
     if(route.id==="rotas"){
       if(!temPermissaoLocal("rotas")){root.innerHTML=`<div class="card"><p style="color:var(--red);">🚫 Sem permissão para acessar Rotas.</p></div>`;return;}
       renderRotas(root);return;
@@ -633,9 +635,22 @@
     const cacheKey=resource;
     const rawItems=safeArray(state.cache[cacheKey]);
 
+    const hoje=new Date().toISOString().slice(0,10);
+    const mesAtual=new Date().toISOString().slice(0,7);
+    if(!state._pedFiltro) state._pedFiltro="tudo";
+
     const getFiltered=()=>{
       const q=String(state.ui.search||"").trim().toLowerCase();
-      const items=rawItems.map(it=>normalizeItem(resource,it));
+      let items=rawItems.map(it=>normalizeItem(resource,it));
+      // Filtro de período nos pedidos
+      if(resource==="pedidos"&&state._pedFiltro!=="tudo"){
+        items=items.filter(it=>{
+          const d=String(it.data||"");
+          if(state._pedFiltro==="hoje") return d===hoje;
+          if(state._pedFiltro==="mes")  return d.startsWith(mesAtual);
+          return true;
+        });
+      }
       return !q?items:items.filter(it=>Object.values(it||{}).some(v=>String(v??"").toLowerCase().includes(q)));
     };
 
@@ -649,6 +664,12 @@
           <button id="sv-new-btn" class="btn btn-primary" style="width:auto;">+ Novo</button>
           <button id="sv-refresh-btn" class="btn btn-secondary btn-icon" title="Atualizar">↻</button>
         </div>
+        ${resource==="pedidos"?`
+        <div style="display:flex;gap:6px;margin-top:10px;">
+          <button class="btn-pfiltro btn ${state._pedFiltro==="hoje"?"btn-primary":"btn-secondary"}" data-pf="hoje" style="font-size:12px;flex:1;">📅 Hoje</button>
+          <button class="btn-pfiltro btn ${state._pedFiltro==="mes"?"btn-primary":"btn-secondary"}" data-pf="mes" style="font-size:12px;flex:1;">📆 Este mês</button>
+          <button class="btn-pfiltro btn ${state._pedFiltro==="tudo"?"btn-primary":"btn-secondary"}" data-pf="tudo" style="font-size:12px;flex:1;">📋 Todos</button>
+        </div>`:""}
         ${resource==="mercadorias"?`
         <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center;">
           <button id="sv-scan-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.3);color:var(--green);">📷 Ler código de barras</button>
@@ -682,6 +703,21 @@
     $("#sv-refresh-btn")?.addEventListener("click",async()=>{
       await runWithUi(async()=>{await loadResource(resource);renderCrudScreen(root,resource);toast("Atualizado.","success");},"Atualizando...");
     });
+
+    // Filtro de período — pedidos
+    if(resource==="pedidos"){
+      $$(".btn-pfiltro").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          state._pedFiltro=btn.getAttribute("data-pf")||"tudo";
+          $$(".btn-pfiltro").forEach(b=>{b.className=b.className.replace("btn-primary","btn-secondary");});
+          btn.className=btn.className.replace("btn-secondary","btn-primary");
+          const f=getFiltered();
+          const cnt=$("#sv-count");
+          if(cnt) cnt.textContent=`${f.length} registro${f.length!==1?"s":""}`;
+          renderList(resource,f,rawItems);
+        });
+      });
+    }
 
     // Exportar CSV (mercadorias)
     if(resource==="mercadorias"){
@@ -795,6 +831,9 @@
       }).filter(Boolean).join(" &nbsp;");
 
       const clickable = resource==="clientes";
+      const tel=resource==="clientes"?String(item.telefone||"").replace(/\D/g,""):"";
+      const wppMsg=encodeURIComponent("Olá, Willyam da Cefeq.");
+      const wppHref=tel.length>=10?`https://wa.me/55${tel}?text=${wppMsg}`:"";
       return`<div class="list-item">
         <div class="list-item-top">
           <div class="list-item-title" ${clickable?`data-cliente-id="${esc(id)}" style="cursor:pointer;color:var(--green);text-decoration:underline;text-decoration-style:dotted;"`:""}>${esc(String(pv||""))}</div>
@@ -803,6 +842,8 @@
         ${metaHtml?`<div style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">${metaHtml}</div>`:""}
         <div class="list-item-actions">
           ${clickable?`<button class="btn btn-secondary" style="font-size:13px;padding:7px 14px;" data-cliente-ver="${esc(id)}">👁 Ver detalhes</button>`:""}
+          ${wppHref?`<a href="${wppHref}" target="_blank" class="btn btn-secondary" style="font-size:13px;padding:7px 14px;background:rgba(37,211,102,.12);border-color:rgba(37,211,102,.35);color:#25d366;text-decoration:none;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="#25d366" style="vertical-align:middle;margin-right:4px;"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>WhatsApp</a>`:""}
           <button class="btn btn-secondary" style="font-size:13px;padding:7px 14px;" data-action="edit" data-id="${esc(id)}">✏️ Editar</button>
           <button class="btn btn-danger" style="font-size:13px;padding:7px 14px;" data-action="delete" data-id="${esc(id)}">🗑️</button>
         </div>
@@ -2689,6 +2730,268 @@
         },"Importando produtos...");
       });
     }
+  }
+
+  // ─── Porta-Cartão de Visitas ──────────────────────────────────────────────────
+  async function renderCartoes(root){
+    function loadCartoes(){try{return JSON.parse(localStorage.getItem("sv_cartoes")||"[]");}catch{return[];}}
+    function saveCartoes(v){try{localStorage.setItem("sv_cartoes",JSON.stringify(v));}catch{}}
+    let cartoes=loadCartoes();
+
+    function renderLista(){
+      const lista=document.getElementById("sv-cart-lista"); if(!lista) return;
+      const q=(document.getElementById("sv-cart-busca")?.value||"").trim().toLowerCase();
+      const filtrados=q?cartoes.filter(c=>
+        String(c.nome||"").toLowerCase().includes(q)||
+        String(c.empresa||"").toLowerCase().includes(q)||
+        String(c.telefone||"").toLowerCase().includes(q)
+      ):cartoes;
+      if(!filtrados.length){
+        lista.innerHTML=`<div class="empty-state"><div class="empty-icon">🪪</div><div class="empty-text">${q?"Nenhum cartão encontrado.":"Nenhum cartão cadastrado ainda.\nToque em + Novo para escanear ou cadastrar."}</div></div>`;
+        return;
+      }
+      lista.innerHTML=filtrados.map(c=>`
+        <div class="list-item">
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            ${c.foto?`<img src="${c.foto}" style="width:72px;height:48px;object-fit:cover;border-radius:8px;flex-shrink:0;border:1px solid var(--border);"/>`:
+              `<div style="width:72px;height:48px;border-radius:8px;background:var(--bg3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0;">🪪</div>`}
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(c.nome||"")}</div>
+              ${c.cargo?`<div style="font-size:12px;color:var(--muted);">${esc(c.cargo)}</div>`:""}
+              ${c.empresa?`<div style="font-size:13px;font-weight:500;margin-top:2px;">🏢 ${esc(c.empresa)}</div>`:""}
+              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;">
+                ${c.telefone?`<span style="font-size:12px;color:var(--muted);">📞 ${esc(c.telefone)}</span>`:""}
+                ${c.email?`<span style="font-size:12px;color:var(--muted);">✉️ ${esc(c.email)}</span>`:""}
+              </div>
+            </div>
+          </div>
+          <div class="list-item-actions" style="margin-top:10px;">
+            ${(()=>{const tel=String(c.telefone||"").replace(/\D/g,"");const wpp=encodeURIComponent("Olá, Willyam da Cefeq.");return tel.length>=10?`<a href="https://wa.me/55${tel}?text=${wpp}" target="_blank" class="btn btn-secondary" style="font-size:12px;padding:6px 12px;background:rgba(37,211,102,.1);border-color:rgba(37,211,102,.3);color:#25d366;text-decoration:none;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="#25d366" style="vertical-align:middle;margin-right:3px;"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>WhatsApp</a>`:"";})()}
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-cart-cli="${c._id}">👤 → Cliente</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-cart-edit="${c._id}">✏️</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-cart-del="${c._id}">🗑️</button>
+          </div>
+        </div>`).join("");
+
+      // Exportar para cliente
+      lista.querySelectorAll("[data-cart-cli]").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          const c=cartoes.find(x=>x._id===btn.getAttribute("data-cart-cli")); if(!c) return;
+          if(!confirm(`Exportar "${c.nome}" para o cadastro de Clientes?`)) return;
+          navigate("clientes");
+          setTimeout(()=>{
+            renderForm("clientes",null);
+            setTimeout(()=>{
+              const campos={nome:c.nome,telefone:c.telefone,email:c.email,obs:c.empresa+(c.cargo?" — "+c.cargo:"")};
+              Object.entries(campos).forEach(([k,v])=>{
+                const el=$("#sv-form-wrap [name='"+k+"']");
+                if(el&&v) el.value=String(v).toUpperCase();
+              });
+              $("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"});
+            },120);
+          },80);
+        });
+      });
+      lista.querySelectorAll("[data-cart-edit]").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          const c=cartoes.find(x=>x._id===btn.getAttribute("data-cart-edit")); if(!c) return;
+          renderFormCartao(c);
+        });
+      });
+      lista.querySelectorAll("[data-cart-del]").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          if(!confirm("Excluir este cartão?")) return;
+          cartoes=cartoes.filter(x=>x._id!==btn.getAttribute("data-cart-del"));
+          saveCartoes(cartoes); renderLista(); toast("Cartão excluído.","info");
+        });
+      });
+    }
+
+    function renderFormCartao(item=null){
+      const fw=document.getElementById("sv-cart-form"); if(!fw) return;
+      const isEdit=!!item;
+      const inStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;text-transform:uppercase;`;
+      fw.innerHTML=`
+        <div class="form-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div style="font-size:15px;font-weight:600;">${isEdit?"✏️ Editar":"📷 Novo"} cartão</div>
+            <button id="cart-fechar" class="btn btn-ghost btn-icon">✕</button>
+          </div>
+
+          <!-- Foto do cartão -->
+          <div style="margin-bottom:14px;">
+            <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;">FOTO DO CARTÃO</div>
+            <div style="display:flex;gap:10px;margin-bottom:10px;">
+              <button id="cart-btn-camera" style="flex:1;padding:12px;background:var(--bg2);border:2px dashed rgba(0,230,118,.4);border-radius:10px;cursor:pointer;font-family:var(--font);font-size:13px;color:var(--green);">📷 Câmera</button>
+              <button id="cart-btn-galeria" style="flex:1;padding:12px;background:var(--bg2);border:2px dashed var(--border-hi);border-radius:10px;cursor:pointer;font-family:var(--font);font-size:13px;">🖼️ Galeria</button>
+            </div>
+            <input type="file" id="cart-input-camera" accept="image/*" capture="environment" style="display:none;"/>
+            <input type="file" id="cart-input-galeria" accept="image/*" style="display:none;"/>
+            <div id="cart-preview-wrap" style="${item?.foto?"":"display:none;"}margin-bottom:10px;text-align:center;">
+              <img id="cart-img-preview" src="${item?.foto||""}" style="max-width:100%;max-height:150px;border-radius:10px;object-fit:contain;border:1px solid var(--border);"/>
+              <button id="cart-ocr-btn" class="btn btn-secondary" style="margin-top:8px;font-size:12px;width:100%;">🤖 Ler dados do cartão automaticamente</button>
+              <div id="cart-ocr-status" style="display:none;font-size:12px;color:var(--muted);margin-top:6px;text-align:center;"></div>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div class="field"><label>Nome *</label><input id="cart-nome" type="text" value="${esc(item?.nome||"")}" placeholder="NOME COMPLETO" style="${inStyle}"/></div>
+            <div class="field"><label>Cargo / Função</label><input id="cart-cargo" type="text" value="${esc(item?.cargo||"")}" placeholder="VENDEDOR, GERENTE..." style="${inStyle}"/></div>
+            <div class="field"><label>Empresa</label><input id="cart-empresa" type="text" value="${esc(item?.empresa||"")}" placeholder="NOME DA EMPRESA" style="${inStyle}"/></div>
+            <div class="field"><label>Telefone</label><input id="cart-tel" type="tel" inputmode="tel" value="${esc(item?.telefone||"")}" placeholder="(00) 00000-0000" style="${inStyle}text-transform:none;"/></div>
+            <div class="field"><label>E-mail</label><input id="cart-email" type="email" inputmode="email" value="${esc(item?.email||"")}" placeholder="email@empresa.com" style="${inStyle}text-transform:none;"/></div>
+            <div class="field"><label>Endereço</label><input id="cart-end" type="text" value="${esc(item?.endereco||"")}" placeholder="RUA, NÚMERO, CIDADE" style="${inStyle}"/></div>
+            <div class="field"><label>Observações</label><textarea id="cart-obs" rows="2" style="${inStyle}resize:vertical;">${esc(item?.obs||"")}</textarea></div>
+          </div>
+          <div class="form-actions">
+            <button id="cart-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Cadastrar"}</button>
+            <button id="cart-cancelar" class="btn btn-ghost">Cancelar</button>
+          </div>
+        </div>`;
+
+      setTimeout(()=>fw.scrollIntoView({behavior:"smooth",block:"start"}),60);
+      setTimeout(()=>bindVozNoCampo(fw),120);
+
+      document.getElementById("cart-fechar")?.addEventListener("click",()=>{fw.innerHTML="";});
+      document.getElementById("cart-cancelar")?.addEventListener("click",()=>{fw.innerHTML="";});
+
+      // Foto
+      let fotoDataUrl=item?.foto||"";
+      const mostrarPreview=(src)=>{
+        fotoDataUrl=src;
+        const pw=document.getElementById("cart-preview-wrap");
+        const pi=document.getElementById("cart-img-preview");
+        if(pw) pw.style.display="block";
+        if(pi) pi.src=src;
+      };
+      const processarFotoCartao=(file)=>{
+        if(!file) return;
+        const r=new FileReader();
+        r.onload=ev=>mostrarPreview(String(ev.target.result||""));
+        r.readAsDataURL(file);
+      };
+      document.getElementById("cart-btn-camera")?.addEventListener("click",()=>document.getElementById("cart-input-camera")?.click());
+      document.getElementById("cart-btn-galeria")?.addEventListener("click",()=>document.getElementById("cart-input-galeria")?.click());
+      document.getElementById("cart-input-camera")?.addEventListener("change",e=>{processarFotoCartao(e.target.files?.[0]);e.target.value="";});
+      document.getElementById("cart-input-galeria")?.addEventListener("change",e=>{processarFotoCartao(e.target.files?.[0]);e.target.value="";});
+
+      // OCR Tesseract para ler dados do cartão
+      document.getElementById("cart-ocr-btn")?.addEventListener("click",async()=>{
+        if(!fotoDataUrl){toast("Adicione uma foto do cartão primeiro.","warning");return;}
+        const btn=document.getElementById("cart-ocr-btn");
+        const statusEl=document.getElementById("cart-ocr-status");
+        btn.disabled=true; btn.textContent="⏳ Lendo...";
+        if(statusEl){statusEl.style.display="block";statusEl.textContent="Carregando leitor OCR...";}
+        try{
+          if(!window.Tesseract){
+            await new Promise((res,rej)=>{
+              const s=document.createElement("script");
+              s.src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js";
+              s.onload=res; s.onerror=()=>rej(new Error("Falha ao carregar OCR."));
+              document.head.appendChild(s);
+            });
+          }
+          if(statusEl) statusEl.textContent="Lendo texto do cartão...";
+          // Converter dataUrl para blob
+          const base64=fotoDataUrl.split(",")[1];
+          const bytes=atob(base64); const arr=new Uint8Array(bytes.length);
+          for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
+          const blob=new Blob([arr],{type:"image/jpeg"});
+          const result=await window.Tesseract.recognize(blob,"por+eng",{
+            logger:m=>{if(m.status==="recognizing text"&&statusEl) statusEl.textContent=`Lendo... ${Math.round((m.progress||0)*100)}%`;}
+          });
+          const txt=(result?.data?.text||"").trim();
+          if(!txt) throw new Error("Não consegui ler texto no cartão.");
+
+          // Parser de cartão de visita
+          const linhas=txt.split("\n").map(l=>l.trim()).filter(l=>l.length>2);
+          const reEmail=/[\w.+-]+@[\w-]+\.[a-z]{2,}/i;
+          const reTel=/(?:\+55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{4}[-.\s]?\d{4}/;
+          const reSite=/(?:www\.)?[\w-]+\.(com|com\.br|net|org|br)\b/i;
+
+          let nome="",cargo="",empresa="",telefone="",email="",site="",endereco="";
+          for(const linha of linhas){
+            const em=linha.match(reEmail); if(em&&!email){email=em[0];continue;}
+            const te=linha.match(reTel); if(te&&!telefone){telefone=te[0];continue;}
+            const si=linha.match(reSite); if(si&&!site){site=si[0];continue;}
+            // Cargo/função: palavras-chave típicas
+            if(!cargo&&/\b(gerente|diretor|vendedor|representante|coord|analista|engenheir|técnico|socio|sócio|proprietário|ceo|cfo|cto|supervisor|consultor)\b/i.test(linha)){cargo=linha;continue;}
+            // Nome: linhas em maiúscula sem números geralmente
+            if(!nome&&/^[A-ZÀ-Ú][a-zà-ú]/.test(linha)&&!/\d/.test(linha)&&linha.split(" ").length>=2){nome=linha;continue;}
+            // Empresa: geralmente nome em caps ou com ltda/me/sa
+            if(!empresa&&(/LTDA|EIRELI|S\.A\.|EPP|ME\b/i.test(linha)||linha===linha.toUpperCase()&&linha.length>4)){empresa=linha;continue;}
+            // Endereço
+            if(!endereco&&/\b(rua|av|avenida|estrada|rod|rodovia|r\.|al\.|alameda)\b/i.test(linha)){endereco=linha;continue;}
+          }
+
+          // Preencher campos
+          if(nome) document.getElementById("cart-nome").value=nome.toUpperCase();
+          if(cargo) document.getElementById("cart-cargo").value=cargo.toUpperCase();
+          if(empresa) document.getElementById("cart-empresa").value=empresa.toUpperCase();
+          if(telefone) document.getElementById("cart-tel").value=telefone;
+          if(email) document.getElementById("cart-email").value=email.toLowerCase();
+          if(endereco) document.getElementById("cart-end").value=endereco.toUpperCase();
+
+          if(statusEl) statusEl.style.display="none";
+          toast("✅ Dados extraídos! Revise antes de salvar.","success");
+        }catch(e){
+          if(statusEl) statusEl.textContent="❌ "+String(e?.message||"Erro ao ler");
+          toast(String(e?.message||"Erro ao ler cartão"),"error",5000);
+        }
+        btn.disabled=false; btn.textContent="🤖 Ler dados do cartão automaticamente";
+      });
+
+      // Máscara telefone
+      document.getElementById("cart-tel")?.addEventListener("input",e=>{
+        let v=e.target.value.replace(/\D/g,"").slice(0,11);
+        if(v.length<=10) v=v.replace(/^(\d{2})(\d{4})(\d{0,4})$/,"($1) $2-$3");
+        else v=v.replace(/^(\d{2})(\d{5})(\d{0,4})$/,"($1) $2-$3");
+        e.target.value=v.replace(/-$/,"");
+      });
+
+      // Salvar
+      document.getElementById("cart-salvar")?.addEventListener("click",()=>{
+        const nome=document.getElementById("cart-nome")?.value?.trim()?.toUpperCase();
+        if(!nome){toast("Nome é obrigatório.","warning");return;}
+        const novo={
+          _id:item?._id||("C"+Date.now()),
+          nome,
+          cargo:document.getElementById("cart-cargo")?.value?.trim()?.toUpperCase()||"",
+          empresa:document.getElementById("cart-empresa")?.value?.trim()?.toUpperCase()||"",
+          telefone:document.getElementById("cart-tel")?.value?.trim()||"",
+          email:document.getElementById("cart-email")?.value?.trim()?.toLowerCase()||"",
+          endereco:document.getElementById("cart-end")?.value?.trim()?.toUpperCase()||"",
+          obs:document.getElementById("cart-obs")?.value?.trim()?.toUpperCase()||"",
+          foto:fotoDataUrl||"",
+          data:new Date().toISOString().slice(0,10),
+        };
+        if(isEdit) cartoes=cartoes.map(x=>x._id===item._id?novo:x);
+        else cartoes.unshift(novo);
+        saveCartoes(cartoes); fw.innerHTML=""; renderLista();
+        toast(`✅ Cartão ${isEdit?"atualizado":"cadastrado"}.`,"success");
+      });
+    }
+
+    // Render principal
+    root.innerHTML=`
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <div class="card-title">🪪 Porta-Cartões</div>
+          <button id="cart-novo-btn" class="btn btn-primary" style="width:auto;">+ Novo cartão</button>
+        </div>
+        <div class="search-wrap" style="margin-top:10px;">
+          <span class="search-icon">🔍</span>
+          <input id="sv-cart-busca" type="search" placeholder="Buscar por nome, empresa..." autocomplete="off"/>
+        </div>
+        <div style="margin-top:6px;font-size:12px;color:var(--muted);">${cartoes.length} cartão${cartoes.length!==1?"ões":""} cadastrado${cartoes.length!==1?"s":""}</div>
+      </div>
+      <div id="sv-cart-form"></div>
+      <div id="sv-cart-lista"></div>`;
+
+    renderLista();
+    document.getElementById("cart-novo-btn")?.addEventListener("click",()=>renderFormCartao(null));
+    document.getElementById("sv-cart-busca")?.addEventListener("input",renderLista);
   }
 
   // ─── Aba Visitas ─────────────────────────────────────────────────────────────
