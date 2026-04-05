@@ -2780,17 +2780,41 @@
           const c=cartoes.find(x=>x._id===btn.getAttribute("data-cart-cli")); if(!c) return;
           if(!confirm(`Exportar "${c.nome}" para o cadastro de Clientes?`)) return;
           navigate("clientes");
+
+          // Aguardar navegação + renderForm + bindAutocomplete + aplicarMascaras
           setTimeout(()=>{
             renderForm("clientes",null);
             setTimeout(()=>{
-              const campos={nome:c.nome,telefone:c.telefone,email:c.email,obs:c.empresa+(c.cargo?" — "+c.cargo:"")};
-              Object.entries(campos).forEach(([k,v])=>{
-                const el=$("#sv-form-wrap [name='"+k+"']");
-                if(el&&v) el.value=String(v).toUpperCase();
-              });
-              $("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"});
-            },120);
-          },80);
+              const set=(name,val,upper=true)=>{
+                if(!val) return;
+                const el=document.querySelector("#sv-form-wrap [name='"+name+"']");
+                if(!el) return;
+                el.value=upper?String(val).toUpperCase():String(val);
+              };
+
+              // Nome do cliente = empresa (nome pessoal vai pra obs)
+              set("nome",    c.empresa||c.nome);
+
+              // Telefone: formatar aqui mesmo sem depender da máscara
+              const d=String(c.telefone||"").replace(/\D/g,"").slice(0,11);
+              if(d){
+                let tel=d;
+                if(d.length===11) tel=d.replace(/^(\d{2})(\d{5})(\d{4})$/,"($1) $2-$3");
+                else if(d.length===10) tel=d.replace(/^(\d{2})(\d{4})(\d{4})$/,"($1) $2-$3");
+                const el=document.querySelector("#sv-form-wrap [name='telefone']");
+                if(el) el.value=tel;
+              }
+
+              set("email",    c.email,    false); // email não maiúsculo
+              set("endereco", c.endereco);
+
+              // obs = nome pessoal + cargo (contexto do contato)
+              const obsVal=[c.nome,c.cargo].filter(Boolean).join(" — ");
+              set("obs", obsVal);
+
+              document.querySelector("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"});
+            },350); // aguarda form + máscaras estarem prontos
+          },120);
         });
       });
       lista.querySelectorAll("[data-cart-edit]").forEach(btn=>{
