@@ -1,0 +1,12 @@
+{
+  "name": "supervenda-frontend",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "babel db.js app.js config.js --out-dir . --out-file-extension .es5.js --presets @babel/preset-env"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.23.0",
+    "@babel/core": "^7.23.0",
+    "@babel/preset-env": "^7.23.0"
+  }
+}
