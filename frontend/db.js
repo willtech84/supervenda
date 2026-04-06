@@ -16,22 +16,53 @@
     else localStorage.removeItem(KEYS.TOKEN);
   }
 
+  // Cookie helpers (compatível com Android WebView antigo)
+  function setCookie(name, value, days) {
+    const expires = new Date(Date.now() + days * 864e5).toUTCString();
+    document.cookie = `${name}=${encodeURIComponent(value)};expires=${expires};path=/;SameSite=Lax`;
+  }
+
+  function getCookie(name) {
+    const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+    return match ? decodeURIComponent(match[2]) : '';
+  }
+
+  function deleteCookie(name) {
+    document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`;
+  }
+
+  function getToken() {
+    return getCookie(KEYS.TOKEN) || localStorage.getItem(KEYS.TOKEN) || "";
+  }
+
+  function setToken(token) {
+    if (token) {
+      setCookie(KEYS.TOKEN, token, 30); // 30 dias
+      localStorage.setItem(KEYS.TOKEN, token); // fallback
+    } else {
+      deleteCookie(KEYS.TOKEN);
+      localStorage.removeItem(KEYS.TOKEN);
+    }
+  }
+
   function getUser() {
     try {
-      return JSON.parse(localStorage.getItem(KEYS.USER) || "null");
+      const raw = getCookie(KEYS.USER) || localStorage.getItem(KEYS.USER) || "null";
+      return JSON.parse(raw);
     } catch {
       return null;
     }
   }
 
   function setUser(user) {
-    if (user) localStorage.setItem(KEYS.USER, JSON.stringify(user));
-    else localStorage.removeItem(KEYS.USER);
-  }
-
-  function clearSession() {
-    setToken("");
-    setUser(null);
+    if (user) {
+      const json = JSON.stringify(user);
+      setCookie(KEYS.USER, json, 30);
+      localStorage.setItem(KEYS.USER, json);
+    } else {
+      deleteCookie(KEYS.USER);
+      localStorage.removeItem(KEYS.USER);
+    }
   }
 
   function apiBase() {
