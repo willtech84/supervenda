@@ -1047,6 +1047,11 @@
   <script src="config.js"></script>
   <script src="db.js"></script>
   <script src="app.js"></script>
+<script>
+window.onerror = function(msg, src, line, col, err) {
+  alert("ERRO: " + msg + "\nLinha: " + line);
+};
+</script>
 
 </body>
 </html>
