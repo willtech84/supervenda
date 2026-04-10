@@ -2382,21 +2382,31 @@
   }
 
   // ─── Helper OCR: carrega Tesseract + redimensiona imagem para economizar memória ──
+  let _tesseractLoading=null; // evitar carregar múltiplas vezes
   async function rodarOCR(blob, onProgress){
-    // 1. Carregar Tesseract.js (versão 4 — mais leve que v5)
+    // 1. Carregar Tesseract.js apenas se necessário
     if(!window.Tesseract){
-      await new Promise((res,rej)=>{
-        const s=document.createElement("script");
-        // v4 usa worker separado e consome bem menos memória que v5
-        s.src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js";
-        s.onload=res;
-        s.onerror=()=>rej(new Error("Falha ao carregar leitor OCR. Verifique a conexão."));
-        document.head.appendChild(s);
-      });
+      if(!_tesseractLoading){
+        _tesseractLoading=new Promise((res,rej)=>{
+          // Verificar se já existe script no DOM
+          if(document.querySelector('script[src*="tesseract"]')){
+            // Script já no DOM mas ainda carregando — aguardar
+            const check=()=>{window.Tesseract?res():setTimeout(check,200);};
+            setTimeout(check,200);
+            return;
+          }
+          const s=document.createElement("script");
+          s.src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js";
+          s.onload=()=>{_tesseractLoading=null; res();};
+          s.onerror=()=>{_tesseractLoading=null; rej(new Error("Falha ao carregar leitor OCR. Verifique a conexão."));};
+          document.head.appendChild(s);
+        });
+      }
+      await _tesseractLoading;
     }
 
     // 2. Redimensionar imagem para max 1200px — reduz memória ~75%
-    const blobReduzido=await new Promise((res,rej)=>{
+    const blobReduzido=await new Promise((res)=>{
       const img=new Image();
       const url=URL.createObjectURL(blob);
       img.onload=()=>{
@@ -2410,18 +2420,18 @@
         const canvas=document.createElement("canvas");
         canvas.width=width; canvas.height=height;
         const ctx=canvas.getContext("2d");
-        // Pré-processar: aumentar contraste para melhorar OCR
         ctx.filter="contrast(1.4) brightness(1.1)";
         ctx.drawImage(img,0,0,width,height);
         canvas.toBlob(b=>res(b||blob),"image/jpeg",0.85);
       };
-      img.onerror=()=>{URL.revokeObjectURL(url); res(blob);}; // fallback: usar original
+      img.onerror=()=>{URL.revokeObjectURL(url); res(blob);};
       img.src=url;
     });
 
-    // 3. Rodar OCR com timeout de segurança (60s)
-    const timeoutPromise=new Promise((_,rej)=>setTimeout(()=>rej(new Error("Tempo esgotado. Tente com uma imagem menor ou mais nítida.")),60000));
-
+    // 3. Rodar OCR com timeout de 60s
+    const timeoutPromise=new Promise((_,rej)=>
+      setTimeout(()=>rej(new Error("Tempo esgotado. Tente com imagem menor ou mais nítida.")),60000)
+    );
     const ocrPromise=window.Tesseract.recognize(blobReduzido,"por+eng",{
       logger:m=>{
         if(m.status==="recognizing text"&&onProgress){
@@ -2429,7 +2439,6 @@
         }
       }
     });
-
     const result=await Promise.race([ocrPromise,timeoutPromise]);
     return result?.data?.text||"";
   }
@@ -3009,22 +3018,40 @@
       document.getElementById("cart-input-galeria")?.addEventListener("change",e=>{processarFotoCartao(e.target.files?.[0]);e.target.value="";});
 
       // OCR Tesseract
-      document.getElementById("cart-ocr-btn")?.addEventListener("click",async()=>{
+      document.getElementById("cart-ocr-btn")?.addEventListener("click",async(e)=>{
+        e.preventDefault();
+        e.stopPropagation();
         if(!fotoDataUrl){toast("Adicione uma foto do cartão primeiro.","warning");return;}
+
+        // Guardar referências antes do await (o DOM pode mudar durante o async)
+        const formWrap=document.getElementById("sv-cart-form");
         const btn=document.getElementById("cart-ocr-btn");
         const statusEl=document.getElementById("cart-ocr-status");
+
+        if(!btn||!formWrap) return;
         btn.disabled=true; btn.textContent="⏳ Lendo...";
-        if(statusEl){statusEl.style.display="block";statusEl.textContent="Carregando leitor OCR...";}
+        if(statusEl){statusEl.style.display="block";statusEl.textContent="📖 Preparando imagem...";}
+
         try{
-          if(statusEl){statusEl.style.display="block";statusEl.textContent="📖 Preparando imagem...";}
           const base64=fotoDataUrl.split(",")[1];
-          const bytes=atob(base64); const arr=new Uint8Array(bytes.length);
+          if(!base64) throw new Error("Foto inválida. Tire a foto novamente.");
+
+          const bytes=atob(base64);
+          const arr=new Uint8Array(bytes.length);
           for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
           const blob=new Blob([arr],{type:"image/jpeg"});
+
           const txt=await rodarOCR(blob,pct=>{
-            if(statusEl) statusEl.textContent=`🔍 Lendo cartão... ${pct}%`;
+            // Verificar se o elemento ainda está no DOM antes de atualizar
+            const s=document.getElementById("cart-ocr-status");
+            if(s) s.textContent=`🔍 Lendo cartão... ${pct}%`;
           });
-          if(!txt) throw new Error("Não consegui ler texto no cartão.");
+
+          // Verificar se o form ainda está no DOM após o processamento async
+          if(!document.getElementById("sv-cart-form")) return; // form foi fechado durante OCR
+
+          if(!txt||txt.trim().length<5) throw new Error("Não consegui ler texto no cartão. Tente foto mais nítida.");
+
           const linhas=txt.split("\n").map(l=>l.trim()).filter(l=>l.length>2);
           const reEmail=/[\w.+-]+@[\w-]+\.[a-z]{2,}/i;
           const reTel=/(?:\+55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{4}[-.\s]?\d{4}/;
@@ -3032,24 +3059,34 @@
           for(const linha of linhas){
             const em=linha.match(reEmail); if(em&&!email){email=em[0];continue;}
             const te=linha.match(reTel); if(te&&!telefone){telefone=te[0];continue;}
-            if(!cargo&&/\b(gerente|diretor|vendedor|representante|coord|analista|engenheir|técnico|socio|sócio|proprietário|ceo|cfo|cto|supervisor|consultor)\b/i.test(linha)){cargo=linha;continue;}
+            if(!cargo&&/\b(gerente|diretor|vendedor|representante|coord|analista|engenheir|técnico|socio|sócio|proprietári|ceo|cfo|cto|supervisor|consultor)\b/i.test(linha)){cargo=linha;continue;}
             if(!nome&&/^[A-ZÀ-Ú][a-zà-ú]/.test(linha)&&!/\d/.test(linha)&&linha.split(" ").length>=2){nome=linha;continue;}
             if(!empresa&&(/LTDA|EIRELI|S\.A\.|EPP|ME\b/i.test(linha)||linha===linha.toUpperCase()&&linha.length>4)){empresa=linha;continue;}
             if(!endereco&&/\b(rua|av|avenida|estrada|rod|rodovia|r\.|al\.|alameda)\b/i.test(linha)){endereco=linha;continue;}
           }
-          if(nome) document.getElementById("cart-nome").value=nome.toUpperCase();
-          if(cargo) document.getElementById("cart-cargo").value=cargo.toUpperCase();
-          if(empresa) document.getElementById("cart-empresa").value=empresa.toUpperCase();
-          if(telefone) document.getElementById("cart-tel").value=telefone;
-          if(email) document.getElementById("cart-email").value=email.toLowerCase();
-          if(endereco) document.getElementById("cart-end").value=endereco.toUpperCase();
-          if(statusEl) statusEl.style.display="none";
-          toast("✅ Dados extraídos! Revise antes de salvar.","success");
-        }catch(e){
-          if(statusEl) statusEl.textContent="❌ "+String(e?.message||"Erro ao ler");
-          toast(String(e?.message||"Erro ao ler cartão"),"error",5000);
+
+          // Preencher campos usando getElementById — mais robusto que querySelector após async
+          const set=(id,val)=>{const el=document.getElementById(id);if(el&&val) el.value=String(val);};
+          set("cart-nome",    nome?.toUpperCase());
+          set("cart-cargo",   cargo?.toUpperCase());
+          set("cart-empresa", empresa?.toUpperCase());
+          set("cart-tel",     telefone);
+          set("cart-email",   email?.toLowerCase());
+          set("cart-end",     endereco?.toUpperCase());
+
+          const s2=document.getElementById("cart-ocr-status");
+          if(s2) s2.style.display="none";
+          toast("✅ Dados extraídos! Revise antes de salvar.","success",4000);
+
+        }catch(err){
+          const msg=String(err?.message||"Erro ao ler cartão");
+          const s3=document.getElementById("cart-ocr-status");
+          if(s3){s3.style.display="block"; s3.textContent="❌ "+msg;}
+          toast(msg,"error",5000);
         }
-        btn.disabled=false; btn.textContent="🤖 Ler dados do cartão automaticamente";
+
+        const b2=document.getElementById("cart-ocr-btn");
+        if(b2){b2.disabled=false; b2.textContent="🤖 Ler dados do cartão automaticamente";}
       });
 
       // Máscara telefone
