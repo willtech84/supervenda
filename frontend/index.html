@@ -993,6 +993,8 @@
           <h1 class="topbar-title" id="topbar-title">Dashboard</h1>
         </div>
         <div class="topbar-right">
+          <span id="sv-sync-indicator" title="Última atualização" style="font-size:10px;color:var(--muted);margin-right:4px;"></span>
+          <button class="btn btn-ghost btn-icon" id="btn-sync-manual" title="Sincronizar dados agora" style="font-size:15px;">⟳</button>
           <button class="btn btn-ghost btn-icon" id="btn-theme" title="Alternar modo claro/escuro" style="font-size:16px;">🌙</button>
           <button class="btn btn-ghost btn-icon" id="btn-backup" title="Backup" style="display:none" class="desktop-only">💾</button>
           <div class="user-menu-wrap">
@@ -1042,11 +1044,8 @@
     </div>
   </div>
 
-<script src="https://cdn.jsdelivr.net/npm/promise-polyfill@8/dist/polyfill.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/whatwg-fetch@3.6.2/fetch.umd.js"></script>
-<script src="config.es5.js"></script>
-<script src="db.es5.js"></script>
-<script src="app.es5.js"></script>
-
+  <script src="config.js"></script>
+  <script src="db.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

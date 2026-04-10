@@ -637,7 +637,9 @@
 
     const hoje=new Date().toISOString().slice(0,10);
     const mesAtual=new Date().toISOString().slice(0,7);
+    const semanaAtras=new Date(Date.now()-7*24*60*60*1000).toISOString().slice(0,10);
     if(!state._pedFiltro) state._pedFiltro="tudo";
+    if(!state._lemFiltro) state._lemFiltro="tudo";
 
     const getFiltered=()=>{
       const q=String(state.ui.search||"").trim().toLowerCase();
@@ -645,9 +647,21 @@
       // Filtro de período nos pedidos
       if(resource==="pedidos"&&state._pedFiltro!=="tudo"){
         items=items.filter(it=>{
-          const d=String(it.data||"");
-          if(state._pedFiltro==="hoje") return d===hoje;
-          if(state._pedFiltro==="mes")  return d.startsWith(mesAtual);
+          const d=String(it.data||"").slice(0,10);
+          if(state._pedFiltro==="hoje")   return d===hoje;
+          if(state._pedFiltro==="semana") return d>=semanaAtras&&d<=hoje;
+          if(state._pedFiltro==="mes")    return d.startsWith(mesAtual);
+          return true;
+        });
+      }
+      // Filtro de período nos lembretes
+      if(resource==="lembretes"&&state._lemFiltro!=="tudo"){
+        items=items.filter(it=>{
+          const d=String(it.data||"").slice(0,10);
+          if(!d) return state._lemFiltro==="tudo";
+          if(state._lemFiltro==="hoje")   return d===hoje;
+          if(state._lemFiltro==="semana") return d>=semanaAtras&&d<=hoje;
+          if(state._lemFiltro==="mes")    return d.startsWith(mesAtual);
           return true;
         });
       }
@@ -667,9 +681,11 @@
         ${resource==="pedidos"?`
         <div style="display:flex;gap:6px;margin-top:10px;">
           <button class="btn-pfiltro btn ${state._pedFiltro==="hoje"?"btn-primary":"btn-secondary"}" data-pf="hoje" style="font-size:12px;flex:1;">📅 Hoje</button>
-          <button class="btn-pfiltro btn ${state._pedFiltro==="mes"?"btn-primary":"btn-secondary"}" data-pf="mes" style="font-size:12px;flex:1;">📆 Este mês</button>
+          <button class="btn-pfiltro btn ${state._pedFiltro==="semana"?"btn-primary":"btn-secondary"}" data-pf="semana" style="font-size:12px;flex:1;">📆 Semana</button>
+          <button class="btn-pfiltro btn ${state._pedFiltro==="mes"?"btn-primary":"btn-secondary"}" data-pf="mes" style="font-size:12px;flex:1;">🗓️ Mês</button>
           <button class="btn-pfiltro btn ${state._pedFiltro==="tudo"?"btn-primary":"btn-secondary"}" data-pf="tudo" style="font-size:12px;flex:1;">📋 Todos</button>
         </div>`:""}
+        ${resource==="lembretes"?renderFiltroPeriodo("_lemFiltro"):""}
         ${resource==="mercadorias"?`
         <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center;">
           <button id="sv-scan-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.3);color:var(--green);">📷 Ler código de barras</button>
@@ -716,6 +732,15 @@
           if(cnt) cnt.textContent=`${f.length} registro${f.length!==1?"s":""}`;
           renderList(resource,f,rawItems);
         });
+      });
+    }
+    // Filtro de período — lembretes
+    if(resource==="lembretes"){
+      bindFiltroPeriodo("_lemFiltro",()=>{
+        const f=getFiltered();
+        const cnt=$("#sv-count");
+        if(cnt) cnt.textContent=`${f.length} registro${f.length!==1?"s":""}`;
+        renderList(resource,f,rawItems);
       });
     }
 
@@ -2356,6 +2381,101 @@
     });
   }
 
+  // ─── Helper OCR: carrega Tesseract + redimensiona imagem para economizar memória ──
+  async function rodarOCR(blob, onProgress){
+    // 1. Carregar Tesseract.js (versão 4 — mais leve que v5)
+    if(!window.Tesseract){
+      await new Promise((res,rej)=>{
+        const s=document.createElement("script");
+        // v4 usa worker separado e consome bem menos memória que v5
+        s.src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js";
+        s.onload=res;
+        s.onerror=()=>rej(new Error("Falha ao carregar leitor OCR. Verifique a conexão."));
+        document.head.appendChild(s);
+      });
+    }
+
+    // 2. Redimensionar imagem para max 1200px — reduz memória ~75%
+    const blobReduzido=await new Promise((res,rej)=>{
+      const img=new Image();
+      const url=URL.createObjectURL(blob);
+      img.onload=()=>{
+        URL.revokeObjectURL(url);
+        const MAX=1200;
+        let {width,height}=img;
+        if(width>MAX||height>MAX){
+          if(width>height){height=Math.round(height*MAX/width);width=MAX;}
+          else{width=Math.round(width*MAX/height);height=MAX;}
+        }
+        const canvas=document.createElement("canvas");
+        canvas.width=width; canvas.height=height;
+        const ctx=canvas.getContext("2d");
+        // Pré-processar: aumentar contraste para melhorar OCR
+        ctx.filter="contrast(1.4) brightness(1.1)";
+        ctx.drawImage(img,0,0,width,height);
+        canvas.toBlob(b=>res(b||blob),"image/jpeg",0.85);
+      };
+      img.onerror=()=>{URL.revokeObjectURL(url); res(blob);}; // fallback: usar original
+      img.src=url;
+    });
+
+    // 3. Rodar OCR com timeout de segurança (60s)
+    const timeoutPromise=new Promise((_,rej)=>setTimeout(()=>rej(new Error("Tempo esgotado. Tente com uma imagem menor ou mais nítida.")),60000));
+
+    const ocrPromise=window.Tesseract.recognize(blobReduzido,"por+eng",{
+      logger:m=>{
+        if(m.status==="recognizing text"&&onProgress){
+          onProgress(Math.round((m.progress||0)*100));
+        }
+      }
+    });
+
+    const result=await Promise.race([ocrPromise,timeoutPromise]);
+    return result?.data?.text||"";
+  }
+
+  // ─── Helper filtro período ─────────────────────────────────────────────────
+  function renderFiltroPeriodo(chaveState, onChangeCb){
+    if(!state[chaveState]) state[chaveState]="tudo";
+    const f=state[chaveState];
+    const html=`<div style="display:flex;gap:6px;margin-top:10px;">
+      <button class="btn-periodo btn ${f==="hoje"?"btn-primary":"btn-secondary"}" data-fp="hoje" style="font-size:12px;flex:1;">📅 Hoje</button>
+      <button class="btn-periodo btn ${f==="semana"?"btn-primary":"btn-secondary"}" data-fp="semana" style="font-size:12px;flex:1;">📆 Semana</button>
+      <button class="btn-periodo btn ${f==="mes"?"btn-primary":"btn-secondary"}" data-fp="mes" style="font-size:12px;flex:1;">🗓️ Mês</button>
+      <button class="btn-periodo btn ${f==="tudo"?"btn-primary":"btn-secondary"}" data-fp="tudo" style="font-size:12px;flex:1;">📋 Todos</button>
+    </div>`;
+    return html;
+  }
+
+  function bindFiltroPeriodo(chaveState, cb){
+    document.querySelectorAll(".btn-periodo").forEach(btn=>{
+      btn.addEventListener("click",()=>{
+        state[chaveState]=btn.getAttribute("data-fp")||"tudo";
+        document.querySelectorAll(".btn-periodo").forEach(b=>{
+          b.className=b.className.replace("btn-primary","btn-secondary");
+        });
+        btn.className=btn.className.replace("btn-secondary","btn-primary");
+        cb();
+      });
+    });
+  }
+
+  function filtrarPorPeriodoGen(items, campoData, chaveState){
+    const f=state[chaveState]||"tudo";
+    if(f==="tudo") return items;
+    const hoje=new Date().toISOString().slice(0,10);
+    const mesAtual=new Date().toISOString().slice(0,7);
+    const semanaAtras=new Date(Date.now()-7*24*60*60*1000).toISOString().slice(0,10);
+    return items.filter(it=>{
+      const d=String(it[campoData]||"").slice(0,10);
+      if(!d) return f==="tudo";
+      if(f==="hoje")   return d===hoje;
+      if(f==="semana") return d>=semanaAtras&&d<=hoje;
+      if(f==="mes")    return d.startsWith(mesAtual);
+      return true;
+    });
+  }
+
   // ─── Foto de Nota/Orçamento → Cadastro Automático de Mercadorias ─────────────
   async function abrirFotoNotaMercadorias(root, rawItems){
     const wrapId="sv-foto-nota-wrap";
@@ -2461,34 +2581,15 @@
       if(statusEl){statusEl.style.display="block";statusEl.textContent="📖 Carregando leitor de texto...";}
 
       try{
-        // Carregar Tesseract.js dinamicamente
-        if(!window.Tesseract){
-          await new Promise((res,rej)=>{
-            const s=document.createElement("script");
-            s.src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js";
-            s.onload=res; s.onerror=()=>rej(new Error("Falha ao carregar leitor OCR."));
-            document.head.appendChild(s);
-          });
-        }
-
-        if(statusEl) statusEl.textContent="🔍 Lendo texto da imagem... (pode levar alguns segundos)";
-
-        // Converter base64 de volta para blob para o Tesseract
+        // Converter base64 para blob e usar helper rodarOCR com redimensionamento
+        if(statusEl) statusEl.textContent="📖 Preparando imagem...";
         const byteChars=atob(base64Foto);
         const byteArr=new Uint8Array(byteChars.length);
         for(let i=0;i<byteChars.length;i++) byteArr[i]=byteChars.charCodeAt(i);
-        const blob=new Blob([byteArr],{type:tipoFoto});
-
-        // Rodar OCR — tenta português + inglês para cobrir mais casos
-        const result=await window.Tesseract.recognize(blob,"por+eng",{
-          logger:m=>{
-            if(m.status==="recognizing text"&&statusEl){
-              statusEl.textContent=`🔍 Lendo... ${Math.round((m.progress||0)*100)}%`;
-            }
-          }
+        const blob=new Blob([byteArr],{type:tipoFoto.includes("image")?tipoFoto:"image/jpeg"});
+        const textoOCR=await rodarOCR(blob,pct=>{
+          if(statusEl) statusEl.textContent=`🔍 Lendo... ${pct}%`;
         });
-
-        const textoOCR=(result?.data?.text||"").trim();
         if(!textoOCR||textoOCR.length<10) throw new Error("Não consegui ler texto na imagem. Tente foto mais nítida e bem iluminada.");
 
         if(statusEl) statusEl.textContent="🧩 Identificando produtos...";
@@ -2915,23 +3016,14 @@
         btn.disabled=true; btn.textContent="⏳ Lendo...";
         if(statusEl){statusEl.style.display="block";statusEl.textContent="Carregando leitor OCR...";}
         try{
-          if(!window.Tesseract){
-            await new Promise((res,rej)=>{
-              const s=document.createElement("script");
-              s.src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js";
-              s.onload=res; s.onerror=()=>rej(new Error("Falha ao carregar OCR."));
-              document.head.appendChild(s);
-            });
-          }
-          if(statusEl) statusEl.textContent="Lendo texto do cartão...";
+          if(statusEl){statusEl.style.display="block";statusEl.textContent="📖 Preparando imagem...";}
           const base64=fotoDataUrl.split(",")[1];
           const bytes=atob(base64); const arr=new Uint8Array(bytes.length);
           for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
           const blob=new Blob([arr],{type:"image/jpeg"});
-          const result=await window.Tesseract.recognize(blob,"por+eng",{
-            logger:m=>{if(m.status==="recognizing text"&&statusEl) statusEl.textContent=`Lendo... ${Math.round((m.progress||0)*100)}%`;}
+          const txt=await rodarOCR(blob,pct=>{
+            if(statusEl) statusEl.textContent=`🔍 Lendo cartão... ${pct}%`;
           });
-          const txt=(result?.data?.text||"").trim();
           if(!txt) throw new Error("Não consegui ler texto no cartão.");
           const linhas=txt.split("\n").map(l=>l.trim()).filter(l=>l.length>2);
           const reEmail=/[\w.+-]+@[\w-]+\.[a-z]{2,}/i;
@@ -3027,20 +3119,39 @@
 
     const inStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;`;
 
+    if(!state._visFiltro) state._visFiltro="tudo";
+
     function renderLista(){
       const lista=document.getElementById("sv-vis-lista"); if(!lista) return;
       const q=String(document.getElementById("sv-vis-busca")?.value||"").toLowerCase();
-      const filtradas=q?visitas.filter(v=>
+      const hoje=new Date().toISOString().slice(0,10);
+      const mesAtual=new Date().toISOString().slice(0,7);
+      const semanaAtras=new Date(Date.now()-7*24*60*60*1000).toISOString().slice(0,10);
+      let filtradas=q?visitas.filter(v=>
         String(v.nome||"").toLowerCase().includes(q)||
         String(v.telefone||"").toLowerCase().includes(q)||
         String(v.obs||"").toLowerCase().includes(q)
-      ):visitas;
+      ):[...visitas];
+      // Filtro de período
+      if(state._visFiltro!=="tudo"){
+        filtradas=filtradas.filter(v=>{
+          const d=String(v.data||"").slice(0,10);
+          if(!d) return false;
+          if(state._visFiltro==="hoje")   return d===hoje;
+          if(state._visFiltro==="semana") return d>=semanaAtras&&d<=hoje;
+          if(state._visFiltro==="mes")    return d.startsWith(mesAtual);
+          return true;
+        });
+      }
       if(!filtradas.length){
         lista.innerHTML=`<div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">${q?"Nenhuma visita encontrada.":"Nenhuma visita registrada ainda."}</div></div>`;
         return;
       }
-      lista.innerHTML=filtradas.map((v,i)=>`
-        <div class="list-item">
+      lista.innerHTML=filtradas.map((v,i)=>{
+        const tel=String(v.telefone||"").replace(/\D/g,"");
+        const wppMsg=encodeURIComponent("Olá, Willyam da Cefeq.");
+        const wppHref=tel.length>=10?`https://wa.me/55${tel}?text=${wppMsg}`:"";
+        return`<div class="list-item">
           <div class="list-item-top">
             <div><div class="list-item-title">${esc(v.nome||"")}</div>
               ${v.endereco?`<div style="font-size:12px;color:var(--muted);margin-top:2px;">📍 ${esc(v.endereco)}</div>`:""}
@@ -3050,11 +3161,14 @@
           ${v.telefone?`<div class="list-item-meta"><span class="meta-item">📞 ${esc(v.telefone)}</span></div>`:""}
           ${v.obs?`<div style="font-size:12px;color:var(--muted);margin-top:4px;padding:0 2px;">${esc(v.obs)}</div>`:""}
           <div class="list-item-actions">
+            ${wppHref?`<a href="${wppHref}" target="_blank" class="btn btn-secondary" style="font-size:12px;padding:6px 12px;background:rgba(37,211,102,.1);border-color:rgba(37,211,102,.3);color:#25d366;text-decoration:none;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="#25d366" style="vertical-align:middle;margin-right:3px;"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>WhatsApp</a>`:""}
             <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-vis-cli="${v._id}">👤 → Cliente</button>
             <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-vis-edit="${v._id}">✏️</button>
             <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-vis-del="${v._id}">🗑️</button>
           </div>
-        </div>`).join("");
+        </div>`;
+      }).join("");
 
       // Exportar para cliente
       lista.querySelectorAll("[data-vis-cli]").forEach(btn=>{
@@ -3197,6 +3311,7 @@
             <button id="vis-export-btn" class="btn btn-secondary" style="font-size:12px;">📤 CSV</button>
           </div>
         </div>
+        ${renderFiltroPeriodo("_visFiltro")}
         <div class="search-wrap" style="margin-top:10px;">
           <span class="search-icon">🔍</span>
           <input id="sv-vis-busca" type="search" placeholder="Buscar visitas..." autocomplete="off"/>
@@ -3210,6 +3325,7 @@
     document.getElementById("vis-nova-btn")?.addEventListener("click",()=>renderFormVisita(null));
     document.getElementById("vis-export-btn")?.addEventListener("click",exportarVisitas);
     document.getElementById("sv-vis-busca")?.addEventListener("input",renderLista);
+    bindFiltroPeriodo("_visFiltro",renderLista);
   }
 
   // ─── Manuais ──────────────────────────────────────────────────────────────────
@@ -3790,22 +3906,41 @@
 
       <!-- Rotas salvas -->
       <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
           <div style="font-size:13px;font-weight:600;">📁 Rotas salvas (${rotasSalvas.length})</div>
           <button id="btn-refresh-rotas" class="btn btn-secondary btn-icon" style="font-size:13px;">↻</button>
         </div>
-        ${rotasSalvas.length?rotasSalvas.map(r=>{
-          let info="";
-          try{const d=JSON.parse(r.obs||"{}");if(d.paradas)info=` · ${d.paradas.length} paradas`;}catch{}
-          return`<div style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;margin-bottom:6px;">
-            <div style="flex:1;overflow:hidden;">
-              <div style="font-size:13px;font-weight:600;">${esc(r.nome||r.titulo||dateFormatBR(r.data)||"Rota")}</div>
-              <div style="font-size:11px;color:var(--muted);">${dateFormatBR(r.data)}${info}</div>
-            </div>
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 10px;" data-carregar-rota="${esc(getId(r))}">📂 Carregar</button>
-            <button class="btn btn-danger" style="font-size:12px;padding:6px 10px;" data-excluir-rota="${esc(getId(r))}">🗑️</button>
-          </div>`;
-        }).join(""):`<div style="padding:12px;text-align:center;color:var(--muted);font-size:13px;">Nenhuma rota salva ainda.</div>`}
+        ${renderFiltroPeriodo("_rotFiltro")}
+        <div id="sv-rotas-lista" style="margin-top:10px;">
+        ${(()=>{
+          if(!state._rotFiltro) state._rotFiltro="tudo";
+          const hoje=new Date().toISOString().slice(0,10);
+          const mesAtual=new Date().toISOString().slice(0,7);
+          const semanaAtras=new Date(Date.now()-7*24*60*60*1000).toISOString().slice(0,10);
+          const filtradas=rotasSalvas.filter(r=>{
+            if(state._rotFiltro==="tudo") return true;
+            const d=String(r.data||"").slice(0,10);
+            if(!d) return false;
+            if(state._rotFiltro==="hoje")   return d===hoje;
+            if(state._rotFiltro==="semana") return d>=semanaAtras&&d<=hoje;
+            if(state._rotFiltro==="mes")    return d.startsWith(mesAtual);
+            return true;
+          });
+          if(!filtradas.length) return`<div style="padding:12px;text-align:center;color:var(--muted);font-size:13px;">Nenhuma rota encontrada.</div>`;
+          return filtradas.map(r=>{
+            let info="";
+            try{const d=JSON.parse(r.obs||"{}");if(d.paradas)info=` · ${d.paradas.length} paradas`;}catch{}
+            return`<div style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;margin-bottom:6px;">
+              <div style="flex:1;overflow:hidden;">
+                <div style="font-size:13px;font-weight:600;">${esc(r.nome||r.titulo||dateFormatBR(r.data)||"Rota")}</div>
+                <div style="font-size:11px;color:var(--muted);">${dateFormatBR(r.data)}${info}</div>
+              </div>
+              <button class="btn btn-secondary" style="font-size:12px;padding:6px 10px;" data-carregar-rota="${esc(getId(r))}">📂 Carregar</button>
+              <button class="btn btn-danger" style="font-size:12px;padding:6px 10px;" data-excluir-rota="${esc(getId(r))}">🗑️</button>
+            </div>`;
+          }).join("");
+        })()}
+        </div>
       </div>
     `;
 
@@ -3820,6 +3955,7 @@
     }
 
     setupBusca();
+    bindFiltroPeriodo("_rotFiltro",()=>renderRotas(root));
 
     // Posição atual
     document.getElementById("btn-geo-atual")?.addEventListener("click",()=>{
@@ -4196,6 +4332,10 @@
   function bindShell(){
     $("#menu-toggle")?.addEventListener("click",()=>{$("#app-sidebar")?.classList.add("mobile-open");const b=$("#sidebar-backdrop");if(b)b.style.display="block";});
     $("#sidebar-backup-btn")?.addEventListener("click",doBackup);
+    // Sync manual — atualiza todos os dados do servidor
+    $("#btn-sync-manual")?.addEventListener("click",async()=>{
+      if(window._svSync) await window._svSync();
+    });
     $("#sidebar-restore-btn")?.addEventListener("click",()=>$("#sidebar-restore-file")?.click());
     $("#sidebar-restore-file")?.addEventListener("change",async e=>{
       const file=e.target.files[0]; if(!file) return;
@@ -4367,6 +4507,54 @@
       const h=(location.hash||"#dashboard").replace("#","")||"dashboard";
       state.route=getRoute(h).id; state.ui.search=""; renderNav(); renderCurrent();
     });
+
+    // ── Sync multi-usuário ──────────────────────────────────────────────────────
+    // Recursos que precisam de sync (excluir notas que são pessoais)
+    const SYNC_RECURSOS=["clientes","mercadorias","pedidos","despesas","lembretes","rotas"];
+
+    // 1. Ao voltar para o app (minimizou e abriu de novo)
+    let ultimoSync=Date.now();
+    document.addEventListener("visibilitychange",async()=>{
+      if(document.hidden) return; // saiu do app
+      const agora=Date.now();
+      const diff=agora-ultimoSync;
+      if(diff<20000) return; // só sincroniza se ficou mais de 20s fora
+      ultimoSync=agora;
+      try{
+        await Promise.allSettled(SYNC_RECURSOS.map(r=>loadResource(r)));
+        renderCurrent();
+      }catch{}
+    });
+
+    // 2. Polling automático a cada 60s (quando app está visível)
+    setInterval(async()=>{
+      if(document.hidden||!DB.getToken()) return;
+      ultimoSync=Date.now();
+      // Só sincronizar o recurso da tela atual para economizar dados
+      const rotaAtual=state.route;
+      const recursoAtual=getRoute(rotaAtual)?.resource;
+      const recursos=recursoAtual?[recursoAtual,...SYNC_RECURSOS.filter(r=>r!==recursoAtual)]:SYNC_RECURSOS;
+      try{
+        await loadResource(recursos[0]); // prioridade: recurso da tela atual
+        renderCurrent();
+        // Resto em background
+        Promise.allSettled(recursos.slice(1).map(r=>loadResource(r)));
+      }catch{}
+    },60000);
+
+    // 3. Indicador visual de última atualização no topo (discreto)
+    function mostrarIndicadorSync(){
+      const hora=new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"});
+      const el=document.getElementById("sv-sync-indicator");
+      if(el) el.textContent=`⟳ ${hora}`;
+    }
+    // Expor para chamada manual se necessário
+    window._svSync=async()=>{
+      await Promise.allSettled(SYNC_RECURSOS.map(r=>loadResource(r)));
+      mostrarIndicadorSync();
+      renderCurrent();
+      toast("✅ Dados atualizados.","success",2000);
+    };
   }
 
   window.SuperVendaApp={state,navigate};
