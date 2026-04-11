@@ -2961,19 +2961,19 @@
         <div class="form-card">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
             <div style="font-size:15px;font-weight:600;">${isEdit?"✏️ Editar":"📷 Novo"} cartão</div>
-            <button id="cart-fechar" class="btn btn-ghost btn-icon">✕</button>
+            <button type="button" id="cart-fechar" class="btn btn-ghost btn-icon">✕</button>
           </div>
           <div style="margin-bottom:14px;">
             <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;">FOTO DO CARTÃO</div>
             <div style="display:flex;gap:10px;margin-bottom:10px;">
-              <button id="cart-btn-camera" style="flex:1;padding:12px;background:var(--bg2);border:2px dashed rgba(0,230,118,.4);border-radius:10px;cursor:pointer;font-family:var(--font);font-size:13px;color:var(--green);">📷 Câmera</button>
-              <button id="cart-btn-galeria" style="flex:1;padding:12px;background:var(--bg2);border:2px dashed var(--border-hi);border-radius:10px;cursor:pointer;font-family:var(--font);font-size:13px;">🖼️ Galeria</button>
+              <button type="button" id="cart-btn-camera" style="flex:1;padding:12px;background:var(--bg2);border:2px dashed rgba(0,230,118,.4);border-radius:10px;cursor:pointer;font-family:var(--font);font-size:13px;color:var(--green);">📷 Câmera</button>
+              <button type="button" id="cart-btn-galeria" style="flex:1;padding:12px;background:var(--bg2);border:2px dashed var(--border-hi);border-radius:10px;cursor:pointer;font-family:var(--font);font-size:13px;">🖼️ Galeria</button>
             </div>
             <input type="file" id="cart-input-camera" accept="image/*" capture="environment" style="display:none;"/>
             <input type="file" id="cart-input-galeria" accept="image/*" style="display:none;"/>
             <div id="cart-preview-wrap" style="${item?.foto?"":"display:none;"}margin-bottom:10px;text-align:center;">
               <img id="cart-img-preview" src="${item?.foto||""}" style="max-width:100%;max-height:150px;border-radius:10px;object-fit:contain;border:1px solid var(--border);"/>
-              <button id="cart-ocr-btn" class="btn btn-secondary" style="margin-top:8px;font-size:12px;width:100%;">🤖 Ler dados do cartão automaticamente</button>
+              <button type="button" id="cart-ocr-btn" class="btn btn-secondary" style="margin-top:8px;font-size:12px;width:100%;">🤖 Ler dados do cartão automaticamente</button>
               <div id="cart-ocr-status" style="display:none;font-size:12px;color:var(--muted);margin-top:6px;text-align:center;"></div>
             </div>
           </div>
@@ -2987,8 +2987,8 @@
             <div class="field"><label>Observações</label><textarea id="cart-obs" rows="2" style="${inStyle}resize:vertical;">${esc(item?.obs||"")}</textarea></div>
           </div>
           <div class="form-actions">
-            <button id="cart-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Cadastrar"}</button>
-            <button id="cart-cancelar" class="btn btn-ghost">Cancelar</button>
+            <button type="button" id="cart-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Cadastrar"}</button>
+            <button type="button" id="cart-cancelar" class="btn btn-ghost">Cancelar</button>
           </div>
         </div>`;
 
@@ -3250,11 +3250,13 @@
     function renderFormVisita(item=null){
       const fw=document.getElementById("sv-vis-form"); if(!fw) return;
       const isEdit=!!item;
+      const RESULTADOS=["INTERESSADO","AGUARDANDO RETORNO","NÃO TINHA INTERESSE","PEDIDO REALIZADO","EM NEGOCIAÇÃO","VISITA AGENDADA","SEM CONTATO"];
+      const ACOES=["ENVIAR ORÇAMENTO","RETORNAR EM 7 DIAS","RETORNAR EM 15 DIAS","RETORNAR EM 30 DIAS","FECHAR PEDIDO","SEM AÇÃO NECESSÁRIA","VISITA DE ACOMPANHAMENTO"];
       fw.innerHTML=`
         <div class="form-card">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
             <div style="font-size:15px;font-weight:600;">${isEdit?"✏️ Editar":"➕ Nova"} visita</div>
-            <button id="vis-close" class="btn btn-ghost btn-icon">✕</button>
+            <button type="button" id="vis-close" class="btn btn-ghost btn-icon">✕</button>
           </div>
           <div class="form-grid">
             <div class="field"><label>Empresa / Nome *</label><input id="vis-nome" type="text" value="${esc(item?.nome||"")}" style="${inStyle}text-transform:uppercase;" placeholder="NOME DA EMPRESA"/></div>
@@ -3268,18 +3270,31 @@
             </div>
             <div class="field"><label>Cidade</label><input id="vis-cid" type="text" value="${esc(item?.cidade||"")}" style="${inStyle}text-transform:uppercase;"/></div>
             <div class="field"><label>Data da visita</label><input id="vis-data" type="date" value="${esc(item?.data||new Date().toISOString().slice(0,10))}" style="${inStyle}"/></div>
+            <div class="field">
+              <label>Resultado</label>
+              <select id="vis-resultado" style="${inStyle}">
+                <option value="">Selecione...</option>
+                ${RESULTADOS.map(r=>`<option value="${r}" ${item?.resultado===r?"selected":""}>${r}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label>Próxima ação</label>
+              <select id="vis-acao" style="${inStyle}">
+                <option value="">Selecione...</option>
+                ${ACOES.map(a=>`<option value="${a}" ${item?.acao===a?"selected":""}>${a}</option>`).join("")}
+              </select>
+            </div>
             <div class="field"><label>Observações</label><textarea id="vis-obs" rows="3" style="${inStyle}resize:vertical;text-transform:uppercase;">${esc(item?.obs||"")}</textarea></div>
           </div>
           <div class="form-actions">
-            <button id="vis-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Registrar visita"}</button>
-            <button id="vis-cancel" class="btn btn-ghost">Cancelar</button>
+            <button type="button" id="vis-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Registrar visita"}</button>
+            <button type="button" id="vis-cancel" class="btn btn-ghost">Cancelar</button>
           </div>
         </div>`;
 
       document.getElementById("vis-close")?.addEventListener("click",()=>{fw.innerHTML="";});
       document.getElementById("vis-cancel")?.addEventListener("click",()=>{fw.innerHTML="";});
 
-      // Geolocalização no endereço da visita
       document.getElementById("vis-geo")?.addEventListener("click",async()=>{
         const btn=document.getElementById("vis-geo");
         if(!navigator.geolocation){toast("Geolocalização indisponível.","warning");return;}
@@ -3300,7 +3315,6 @@
         },err=>{toast(err.message,"error");btn.textContent="📍 Localização";btn.disabled=false;},{enableHighAccuracy:true,timeout:8000});
       });
 
-      // Máscara telefone
       document.getElementById("vis-tel")?.addEventListener("input",e=>{
         let v=e.target.value.replace(/\D/g,"").slice(0,11);
         if(v.length<=10) v=v.replace(/^(\d{2})(\d{4})(\d{0,4})$/,"($1) $2-$3");
@@ -3317,6 +3331,8 @@
           endereco:document.getElementById("vis-end")?.value?.toUpperCase()||"",
           cidade:document.getElementById("vis-cid")?.value?.toUpperCase()||"",
           data:document.getElementById("vis-data")?.value||new Date().toISOString().slice(0,10),
+          resultado:document.getElementById("vis-resultado")?.value||"",
+          acao:document.getElementById("vis-acao")?.value||"",
           obs:document.getElementById("vis-obs")?.value?.toUpperCase()||"",
         };
         if(isEdit){ visitas=visitas.map(x=>x._id===item._id?nova:x); }
@@ -3328,14 +3344,111 @@
       setTimeout(()=>bindVozNoCampo(fw),120);
     }
 
-    // Exportar todas as visitas como CSV
+    // Exportar CSV
     function exportarVisitas(){
       if(!visitas.length){toast("Nenhuma visita para exportar.","warning");return;}
-      const cols=["nome","telefone","endereco","cidade","data","obs"];
-      const csv="\uFEFF"+[cols.join(";"),...visitas.map(v=>cols.map(c=>{const x=v[c]||"";return x.includes(";")?`"${x}"`:x;}).join(";"))].join("\n");
+      const cols=["data","nome","telefone","endereco","cidade","resultado","acao","obs"];
+      const hdrs=["Data","Empresa","Telefone","Endereço","Cidade","Resultado","Próxima Ação","Observações"];
+      const csv="\uFEFF"+[hdrs.join(";"),...visitas.map(v=>cols.map(c=>{const x=c==="data"?dateFormatBR(v[c]):v[c]||"";return x.includes(";")?`"${x}"`:x;}).join(";"))].join("\n");
       const a=Object.assign(document.createElement("a"),{href:URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"})),download:`visitas_${new Date().toISOString().slice(0,10)}.csv`});
       a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
       toast(`${visitas.length} visitas exportadas.`,"success");
+    }
+
+    // Relatório de visitas — janela HTML imprimível
+    function gerarRelatorioVisitas(){
+      const hoje=new Date().toISOString().slice(0,10);
+      const mes=new Date().toISOString().slice(0,7);
+      // Filtrar pelo estado atual do filtro
+      const filtradas=filtrarPorPeriodoGen(visitas,"data","_visFiltro");
+      if(!filtradas.length){toast("Nenhuma visita no período selecionado.","warning");return;}
+
+      const titulo=state._visFiltro==="hoje"?"Hoje":
+                   state._visFiltro==="semana"?"Esta Semana":
+                   state._visFiltro==="mes"?"Este Mês":"Todas as Visitas";
+
+      const corResultado=r=>{
+        if(!r) return "#888";
+        if(/pedido|realizado/i.test(r)) return "#00a86b";
+        if(/interesse|negoci/i.test(r)) return "#f59e0b";
+        if(/não|sem contato/i.test(r)) return "#ef4444";
+        return "#3b82f6";
+      };
+
+      const win=window.open("","_blank","width=900,height=700");
+      if(!win){toast("Permita popups para gerar o relatório.","warning");return;}
+      win.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/>
+        <title>Relatório de Visitas</title>
+        <style>
+          *{box-sizing:border-box;margin:0;padding:0;}
+          body{font-family:Arial,sans-serif;font-size:12px;color:#222;background:#fff;padding:20px;}
+          .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #1a2744;padding-bottom:12px;margin-bottom:16px;}
+          .header h1{font-size:20px;color:#1a2744;}
+          .header .sub{font-size:11px;color:#666;margin-top:4px;}
+          .stats{display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;}
+          .stat-box{background:#f4f6fa;border-radius:8px;padding:10px 16px;flex:1;min-width:120px;text-align:center;}
+          .stat-box .val{font-size:22px;font-weight:700;color:#1a2744;}
+          .stat-box .lbl{font-size:10px;color:#666;margin-top:2px;}
+          table{width:100%;border-collapse:collapse;font-size:11px;}
+          thead th{background:#1a2744;color:#fff;padding:8px 10px;text-align:left;}
+          tbody tr:nth-child(even){background:#f9fafb;}
+          tbody td{padding:7px 10px;border-bottom:1px solid #e5e7eb;vertical-align:top;}
+          .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600;color:#fff;}
+          .acao-cell{font-size:10px;color:#555;font-style:italic;}
+          .footer{margin-top:20px;font-size:10px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:10px;}
+          @media print{body{padding:10px;}.no-print{display:none;}}
+        </style>
+      </head><body>
+        <div class="no-print" style="margin-bottom:12px;display:flex;gap:8px;">
+          <button onclick="window.print()" style="padding:8px 16px;background:#1a2744;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">🖨️ Imprimir / Salvar PDF</button>
+          <button onclick="window.close()" style="padding:8px 16px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-size:13px;">✕ Fechar</button>
+        </div>
+        <div class="header">
+          <div>
+            <h1>📋 Relatório de Visitas — ${esc(titulo)}</h1>
+            <div class="sub">Gerado em ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})} · CEFEQ Suprimentos Industriais</div>
+          </div>
+          <div style="text-align:right;font-size:11px;color:#666;">
+            <strong>${filtradas.length}</strong> visita${filtradas.length!==1?"s":""}<br/>
+            Período: ${esc(titulo)}
+          </div>
+        </div>
+
+        <!-- Resumo estatístico -->
+        <div class="stats">
+          <div class="stat-box"><div class="val">${filtradas.length}</div><div class="lbl">Total de visitas</div></div>
+          <div class="stat-box"><div class="val" style="color:#00a86b;">${filtradas.filter(v=>/pedido|realizado/i.test(v.resultado||"")).length}</div><div class="lbl">Pedidos realizados</div></div>
+          <div class="stat-box"><div class="val" style="color:#f59e0b;">${filtradas.filter(v=>/interesse|negoci|aguard/i.test(v.resultado||"")).length}</div><div class="lbl">Em andamento</div></div>
+          <div class="stat-box"><div class="val" style="color:#3b82f6;">${[...new Set(filtradas.map(v=>v.cidade).filter(Boolean))].length}</div><div class="lbl">Cidades</div></div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width:70px;">Data</th>
+              <th>Empresa</th>
+              <th style="width:110px;">Telefone</th>
+              <th style="width:80px;">Cidade</th>
+              <th>Resultado</th>
+              <th>Próxima Ação</th>
+              <th>Observações</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filtradas.map(v=>`<tr>
+              <td style="white-space:nowrap;">${dateFormatBR(v.data)}</td>
+              <td><strong>${esc(v.nome||"")}</strong></td>
+              <td>${esc(v.telefone||"")}</td>
+              <td>${esc(v.cidade||"")}</td>
+              <td>${v.resultado?`<span class="badge" style="background:${corResultado(v.resultado)};">${esc(v.resultado)}</span>`:""}</td>
+              <td class="acao-cell">${esc(v.acao||"")}</td>
+              <td style="font-size:10px;color:#444;">${esc(v.obs||"")}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+        <div class="footer">Desenvolvido por Willtech84 · SuperVenda</div>
+      </body></html>`);
+      win.document.close();
     }
 
     // Render principal
@@ -3343,8 +3456,9 @@
       <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
           <div class="card-title">🏢 Visitas</div>
-          <div style="display:flex;gap:6px;">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
             <button id="vis-nova-btn" class="btn btn-primary" style="width:auto;">+ Nova visita</button>
+            <button id="vis-rel-btn" class="btn btn-secondary" style="font-size:12px;">📋 Relatório</button>
             <button id="vis-export-btn" class="btn btn-secondary" style="font-size:12px;">📤 CSV</button>
           </div>
         </div>
@@ -3360,6 +3474,7 @@
 
     renderLista();
     document.getElementById("vis-nova-btn")?.addEventListener("click",()=>renderFormVisita(null));
+    document.getElementById("vis-rel-btn")?.addEventListener("click",gerarRelatorioVisitas);
     document.getElementById("vis-export-btn")?.addEventListener("click",exportarVisitas);
     document.getElementById("sv-vis-busca")?.addEventListener("input",renderLista);
     bindFiltroPeriodo("_visFiltro",renderLista);
@@ -4566,15 +4681,17 @@
     // 2. Polling automático a cada 60s (quando app está visível)
     setInterval(async()=>{
       if(document.hidden||!DB.getToken()) return;
+      // Não re-renderizar se usuário está com form aberto ou processando algo
+      const formAberto=document.querySelector(".form-card");
+      if(formAberto) return;
       ultimoSync=Date.now();
-      // Só sincronizar o recurso da tela atual para economizar dados
       const rotaAtual=state.route;
       const recursoAtual=getRoute(rotaAtual)?.resource;
       const recursos=recursoAtual?[recursoAtual,...SYNC_RECURSOS.filter(r=>r!==recursoAtual)]:SYNC_RECURSOS;
       try{
-        await loadResource(recursos[0]); // prioridade: recurso da tela atual
-        renderCurrent();
-        // Resto em background
+        await loadResource(recursos[0]);
+        // Só re-renderizar se não abriu form entre o await
+        if(!document.querySelector(".form-card")) renderCurrent();
         Promise.allSettled(recursos.slice(1).map(r=>loadResource(r)));
       }catch{}
     },60000);
