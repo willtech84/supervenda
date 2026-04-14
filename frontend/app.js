@@ -3012,8 +3012,14 @@
         r.onload=ev=>mostrarPreview(String(ev.target.result||""));
         r.readAsDataURL(file);
       };
-      document.getElementById("cart-btn-camera")?.addEventListener("click",()=>document.getElementById("cart-input-camera")?.click());
-      document.getElementById("cart-btn-galeria")?.addEventListener("click",()=>document.getElementById("cart-input-galeria")?.click());
+      document.getElementById("cart-btn-camera")?.addEventListener("click",()=>{
+        window._svFilePickerAt=Date.now(); // bloquear re-render enquanto câmera aberta
+        document.getElementById("cart-input-camera")?.click();
+      });
+      document.getElementById("cart-btn-galeria")?.addEventListener("click",()=>{
+        window._svFilePickerAt=Date.now();
+        document.getElementById("cart-input-galeria")?.click();
+      });
       document.getElementById("cart-input-camera")?.addEventListener("change",e=>{processarFotoCartao(e.target.files?.[0]);e.target.value="";});
       document.getElementById("cart-input-galeria")?.addEventListener("change",e=>{processarFotoCartao(e.target.files?.[0]);e.target.value="";});
 
@@ -4664,46 +4670,58 @@
     // Recursos que precisam de sync (excluir notas que são pessoais)
     const SYNC_RECURSOS=["clientes","mercadorias","pedidos","despesas","lembretes","rotas"];
 
-    // 1. Ao voltar para o app (minimizou e abriu de novo)
+    // Flag global — true quando form está aberto (inclui file picker da câmera)
+    window._svFormAberto=()=>{
+      // Form explicitamente aberto
+      if(document.querySelector(".form-card, #sv-cart-form:not(:empty), #sv-vis-form:not(:empty), #sv-users-form-wrap:not(:empty), #sv-form-wrap:not(:empty)")) return true;
+      // File picker foi ativado nos últimos 60s (câmera/galeria)
+      if(window._svFilePickerAt&&Date.now()-window._svFilePickerAt<60000) return true;
+      return false;
+    };
+
+    // Marcar quando qualquer input file é clicado (câmera/galeria)
+    document.addEventListener("click",e=>{
+      if(e.target.type==="file"||e.target.closest("[id$='-camera'],[id$='-galeria'],[id$='-file']")){
+        window._svFilePickerAt=Date.now();
+      }
+    },true);
+
+    // 1. Ao voltar para o app — NÃO re-renderiza se form aberto
     let ultimoSync=Date.now();
     document.addEventListener("visibilitychange",async()=>{
-      if(document.hidden) return; // saiu do app
+      if(document.hidden) return;
       const agora=Date.now();
-      const diff=agora-ultimoSync;
-      if(diff<20000) return; // só sincroniza se ficou mais de 20s fora
+      if(agora-ultimoSync<30000) return; // menos de 30s fora → ignorar
       ultimoSync=agora;
       try{
         await Promise.allSettled(SYNC_RECURSOS.map(r=>loadResource(r)));
-        renderCurrent();
+        if(!window._svFormAberto()) renderCurrent(); // só re-renderiza se sem form
       }catch{}
     });
 
-    // 2. Polling automático a cada 60s (quando app está visível)
+    // 2. Polling a cada 90s — nunca re-renderiza com form aberto
     setInterval(async()=>{
-      if(document.hidden||!DB.getToken()) return;
-      // Não re-renderizar se usuário está com form aberto ou processando algo
-      const formAberto=document.querySelector(".form-card");
-      if(formAberto) return;
+      if(document.hidden||!DB.getToken()||window._svFormAberto()) return;
       ultimoSync=Date.now();
-      const rotaAtual=state.route;
-      const recursoAtual=getRoute(rotaAtual)?.resource;
-      const recursos=recursoAtual?[recursoAtual,...SYNC_RECURSOS.filter(r=>r!==recursoAtual)]:SYNC_RECURSOS;
+      const recursoAtual=getRoute(state.route)?.resource;
+      const recursos=recursoAtual
+        ?[recursoAtual,...SYNC_RECURSOS.filter(r=>r!==recursoAtual)]
+        :SYNC_RECURSOS;
       try{
         await loadResource(recursos[0]);
-        // Só re-renderizar se não abriu form entre o await
-        if(!document.querySelector(".form-card")) renderCurrent();
+        if(!window._svFormAberto()) renderCurrent();
         Promise.allSettled(recursos.slice(1).map(r=>loadResource(r)));
       }catch{}
-    },60000);
+    },90000);
 
-    // 3. Indicador visual de última atualização no topo (discreto)
+    // 3. Sync manual pelo botão ⟳
     function mostrarIndicadorSync(){
       const hora=new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"});
       const el=document.getElementById("sv-sync-indicator");
       if(el) el.textContent=`⟳ ${hora}`;
     }
-    // Expor para chamada manual se necessário
     window._svSync=async()=>{
+      if(window._svFormAberto()){toast("Feche o formulário antes de sincronizar.","warning",2500);return;}
       await Promise.allSettled(SYNC_RECURSOS.map(r=>loadResource(r)));
       mostrarIndicadorSync();
       renderCurrent();
