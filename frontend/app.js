@@ -2844,21 +2844,22 @@
 
   // ─── Porta-Cartão de Visitas ──────────────────────────────────────────────────
   async function renderCartoes(root){
-    // ── Sempre ler/escrever direto no localStorage — sem closure stale ─────────
-    const KEY="sv_cartoes";
-    const lerCartoes=()=>{try{return JSON.parse(localStorage.getItem(KEY)||"[]");}catch{return[];}};
-    const gravarCartoes=v=>{try{localStorage.setItem(KEY,JSON.stringify(v));}catch{}};
+    // ── Estado em memória — carregado da API, não do localStorage ──────────────
+    let cartoes=[];
+
+    async function carregarCartoes(){
+      try{ cartoes=safeArray(await DB.request("/api/cartoes",{method:"GET"})); }
+      catch(e){ cartoes=[]; console.warn("cartoes:",e?.message); }
+    }
 
     function atualizarContador(){
-      const el=document.getElementById("sv-cart-count");
-      if(!el) return;
-      const n=lerCartoes().length;
+      const el=document.getElementById("sv-cart-count"); if(!el) return;
+      const n=cartoes.length;
       el.textContent=`${n} cartão${n!==1?"ões":""} cadastrado${n!==1?"s":""}`;
     }
 
     function renderLista(){
       const lista=document.getElementById("sv-cart-lista"); if(!lista) return;
-      const cartoes=lerCartoes(); // ← sempre fresco do localStorage
       atualizarContador();
       const q=(document.getElementById("sv-cart-busca")?.value||"").trim().toLowerCase();
       const filtrados=q?cartoes.filter(c=>
@@ -2888,9 +2889,9 @@
           <div class="list-item-actions" style="margin-top:10px;">
             ${(()=>{const tel=String(c.telefone||"").replace(/\D/g,"");const wpp=encodeURIComponent("Olá, Willyam da Cefeq.");return tel.length>=10?`<a href="https://wa.me/55${tel}?text=${wpp}" target="_blank" class="btn btn-secondary" style="font-size:12px;padding:6px 12px;background:rgba(37,211,102,.1);border-color:rgba(37,211,102,.3);color:#25d366;text-decoration:none;">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="#25d366" style="vertical-align:middle;margin-right:3px;"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>WhatsApp</a>`:"";})()}
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-cart-cli="${c._id}">👤 → Cliente</button>
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-cart-edit="${c._id}">✏️</button>
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-cart-del="${c._id}">🗑️</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-cart-cli="${c.id||c._id}">👤 → Cliente</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-cart-edit="${c.id||c._id}">✏️</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-cart-del="${c.id||c._id}">🗑️</button>
           </div>
         </div>`).join("");
 
@@ -2898,7 +2899,7 @@
       lista.querySelectorAll("[data-cart-cli]").forEach(btn=>{
         btn.addEventListener("click",()=>{
           const id=btn.getAttribute("data-cart-cli");
-          const c=lerCartoes().find(x=>x._id===id); // ← ler fresh
+          const c=cartoes.find(x=>(x.id||x._id)===id);
           if(!c) return;
           if(!confirm(`Exportar "${c.nome}" para o cadastro de Clientes?`)) return;
           navigate("clientes");
@@ -2934,7 +2935,7 @@
       lista.querySelectorAll("[data-cart-edit]").forEach(btn=>{
         btn.addEventListener("click",()=>{
           const id=btn.getAttribute("data-cart-edit");
-          const c=lerCartoes().find(x=>x._id===id); // ← ler fresh
+          const c=cartoes.find(x=>(x.id||x._id)===id);
           if(!c) return;
           renderFormCartao(c);
         });
@@ -2942,13 +2943,16 @@
 
       // Excluir
       lista.querySelectorAll("[data-cart-del]").forEach(btn=>{
-        btn.addEventListener("click",()=>{
+        btn.addEventListener("click",async()=>{
           const id=btn.getAttribute("data-cart-del");
-          const c=lerCartoes().find(x=>x._id===id);
+          const c=cartoes.find(x=>(x.id||x._id)===id);
           if(!confirm(`Excluir o cartão "${c?.nome||""}"?`)) return;
-          gravarCartoes(lerCartoes().filter(x=>x._id!==id)); // ← ler, filtrar, gravar
-          renderLista();
-          toast("Cartão excluído.","info");
+          await runWithUi(async()=>{
+            await DB.request(`/api/cartoes/${encodeURIComponent(id)}`,{method:"DELETE"});
+            cartoes=cartoes.filter(x=>(x.id||x._id)!==id);
+            renderLista();
+            toast("Cartão excluído.","info");
+          },"Excluindo...");
         });
       });
     }
@@ -3103,31 +3107,38 @@
         e.target.value=v.replace(/-$/,"");
       });
 
-      // Salvar — sempre ler e gravar do localStorage
-      document.getElementById("cart-salvar")?.addEventListener("click",()=>{
+      // Salvar via API
+      document.getElementById("cart-salvar")?.addEventListener("click",async()=>{
         const nome=document.getElementById("cart-nome")?.value?.trim()?.toUpperCase();
         if(!nome){toast("Nome é obrigatório.","warning");return;}
-        const novo={
-          _id:item?._id||("C"+Date.now()),
+        const payload={
+          id: item?.id||item?._id||("CN-"+Date.now()),
           nome,
-          cargo: document.getElementById("cart-cargo")?.value?.trim()?.toUpperCase()||"",
-          empresa: document.getElementById("cart-empresa")?.value?.trim()?.toUpperCase()||"",
-          telefone: document.getElementById("cart-tel")?.value?.trim()||"",
-          email: document.getElementById("cart-email")?.value?.trim()?.toLowerCase()||"",
-          endereco: document.getElementById("cart-end")?.value?.trim()?.toUpperCase()||"",
-          obs: document.getElementById("cart-obs")?.value?.trim()?.toUpperCase()||"",
-          foto: fotoDataUrl||"",
-          data: new Date().toISOString().slice(0,10),
+          cargo:  document.getElementById("cart-cargo")?.value?.trim()?.toUpperCase()||"",
+          empresa:document.getElementById("cart-empresa")?.value?.trim()?.toUpperCase()||"",
+          telefone:document.getElementById("cart-tel")?.value?.trim()||"",
+          email:  document.getElementById("cart-email")?.value?.trim()?.toLowerCase()||"",
+          endereco:document.getElementById("cart-end")?.value?.trim()?.toUpperCase()||"",
+          obs:    document.getElementById("cart-obs")?.value?.trim()?.toUpperCase()||"",
+          foto:   fotoDataUrl||"",
         };
-        // ← Ler lista atual do localStorage antes de inserir/editar
-        const atual=lerCartoes();
-        const nova=isEdit
-          ? atual.map(x=>x._id===item._id?novo:x)
-          : [novo,...atual]; // novo sempre no início
-        gravarCartoes(nova);
-        fw.innerHTML="";
-        renderLista();
-        toast(`✅ Cartão ${isEdit?"atualizado":"cadastrado"}.`,"success");
+        await runWithUi(async()=>{
+          if(isEdit){
+            await DB.request(`/api/cartoes/${encodeURIComponent(payload.id)}`,{
+              method:"PUT", body:JSON.stringify(payload)
+            });
+            cartoes=cartoes.map(x=>(x.id||x._id)===payload.id?{...x,...payload}:x);
+          } else {
+            const novo=await DB.request("/api/cartoes",{
+              method:"POST", body:JSON.stringify(payload)
+            });
+            cartoes=[{...payload,...(novo||{})}, ...cartoes];
+          }
+          const fw2=document.getElementById("sv-cart-form");
+          if(fw2) fw2.innerHTML="";
+          renderLista();
+          toast(`✅ Cartão ${isEdit?"atualizado":"cadastrado"}.`,"success");
+        },isEdit?"Salvando...":"Cadastrando...");
       });
     }
 
@@ -3136,34 +3147,46 @@
       <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
           <div class="card-title">🪪 Porta-Cartões</div>
-          <button id="cart-novo-btn" class="btn btn-primary" style="width:auto;">+ Novo cartão</button>
+          <div style="display:flex;gap:6px;">
+            <button id="cart-novo-btn" class="btn btn-primary" style="width:auto;">+ Novo cartão</button>
+            <button id="cart-refresh-btn" class="btn btn-secondary btn-icon" title="Atualizar">↻</button>
+          </div>
         </div>
         <div class="search-wrap" style="margin-top:10px;">
           <span class="search-icon">🔍</span>
           <input id="sv-cart-busca" type="search" placeholder="Buscar por nome, empresa..." autocomplete="off"/>
         </div>
-        <div id="sv-cart-count" style="margin-top:6px;font-size:12px;color:var(--muted);"></div>
+        <div id="sv-cart-count" style="margin-top:6px;font-size:12px;color:var(--muted);">Carregando...</div>
       </div>
       <div id="sv-cart-form"></div>
-      <div id="sv-cart-lista"></div>`;
+      <div id="sv-cart-lista"><div class="empty-state"><div class="empty-icon">🪪</div><div class="empty-text">Carregando cartões...</div></div></div>`;
 
-    renderLista();
+    // Carregar da API
+    await runWithUi(async()=>{
+      await carregarCartoes();
+      renderLista();
+    },"Carregando cartões...");
+
     document.getElementById("cart-novo-btn")?.addEventListener("click",()=>renderFormCartao(null));
+    document.getElementById("cart-refresh-btn")?.addEventListener("click",async()=>{
+      await runWithUi(async()=>{ await carregarCartoes(); renderLista(); toast("Atualizado.","success"); },"Atualizando...");
+    });
     document.getElementById("sv-cart-busca")?.addEventListener("input",renderLista);
   }
 
 
   // ─── Aba Visitas ─────────────────────────────────────────────────────────────
   async function renderVisitas(root){
-    // Cache local de visitas (IndexedDB-lite via localStorage)
-    function loadVisitas(){try{return JSON.parse(localStorage.getItem("sv_visitas")||"[]");}catch{return[];}}
-    function saveVisitas(v){try{localStorage.setItem("sv_visitas",JSON.stringify(v));}catch{}}
-    let visitas=loadVisitas();
+    // ── Dados carregados da API — visíveis para todos os usuários ──────────────
+    let visitas=[];
+    async function carregarVisitas(){
+      try{ visitas=safeArray(await DB.request("/api/visitas",{method:"GET"})); }
+      catch(e){ visitas=[]; console.warn("visitas:",e?.message); }
+    }
 
     const inStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;`;
 
     if(!state._visFiltro) state._visFiltro="tudo";
-
     function renderLista(){
       const lista=document.getElementById("sv-vis-lista"); if(!lista) return;
       const q=String(document.getElementById("sv-vis-busca")?.value||"").toLowerCase();
@@ -3206,9 +3229,9 @@
           <div class="list-item-actions">
             ${wppHref?`<a href="${wppHref}" target="_blank" class="btn btn-secondary" style="font-size:12px;padding:6px 12px;background:rgba(37,211,102,.1);border-color:rgba(37,211,102,.3);color:#25d366;text-decoration:none;">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="#25d366" style="vertical-align:middle;margin-right:3px;"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>WhatsApp</a>`:""}
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-vis-cli="${v._id}">👤 → Cliente</button>
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-vis-edit="${v._id}">✏️</button>
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-vis-del="${v._id}">🗑️</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-vis-cli="${v.id||v._id}">👤 → Cliente</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-vis-edit="${v.id||v._id}">✏️</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-vis-del="${v.id||v._id}">🗑️</button>
           </div>
         </div>`;
       }).join("");
@@ -3217,7 +3240,7 @@
       lista.querySelectorAll("[data-vis-cli]").forEach(btn=>{
         btn.addEventListener("click",()=>{
           const id=btn.getAttribute("data-vis-cli");
-          const v=visitas.find(x=>x._id===id); if(!v) return;
+          const v=visitas.find(x=>(x.id||x._id)===id); if(!v) return;
           if(!confirm(`Exportar "${v.nome}" para o cadastro de Clientes?`)) return;
           navigate("clientes");
           setTimeout(()=>{
@@ -3237,18 +3260,21 @@
       lista.querySelectorAll("[data-vis-edit]").forEach(btn=>{
         btn.addEventListener("click",()=>{
           const id=btn.getAttribute("data-vis-edit");
-          const v=visitas.find(x=>x._id===id); if(!v) return;
+          const v=visitas.find(x=>(x.id||x._id)===id); if(!v) return;
           renderFormVisita(v);
         });
       });
       // Excluir
       lista.querySelectorAll("[data-vis-del]").forEach(btn=>{
-        btn.addEventListener("click",()=>{
+        btn.addEventListener("click",async()=>{
           const id=btn.getAttribute("data-vis-del");
           if(!confirm("Excluir esta visita?")) return;
-          visitas=visitas.filter(x=>x._id!==id);
-          saveVisitas(visitas); renderLista();
-          toast("Visita excluída.","info");
+          await runWithUi(async()=>{
+            await DB.request(`/api/visitas/${encodeURIComponent(id)}`,{method:"DELETE"});
+            visitas=visitas.filter(x=>(x.id||x._id)!==id);
+            renderLista();
+            toast("Visita excluída.","info");
+          },"Excluindo...");
         });
       });
     }
@@ -3328,11 +3354,11 @@
         e.target.value=v.replace(/-$/,"");
       });
 
-      document.getElementById("vis-salvar")?.addEventListener("click",()=>{
+      document.getElementById("vis-salvar")?.addEventListener("click",async()=>{
         const nome=document.getElementById("vis-nome")?.value?.trim()?.toUpperCase();
         if(!nome){toast("Informe o nome da empresa.","warning");return;}
-        const nova={
-          _id:item?._id||("V"+Date.now()),
+        const payload={
+          id: item?.id||item?._id||("VS-"+Date.now()),
           nome, telefone:document.getElementById("vis-tel")?.value||"",
           endereco:document.getElementById("vis-end")?.value?.toUpperCase()||"",
           cidade:document.getElementById("vis-cid")?.value?.toUpperCase()||"",
@@ -3341,10 +3367,17 @@
           acao:document.getElementById("vis-acao")?.value||"",
           obs:document.getElementById("vis-obs")?.value?.toUpperCase()||"",
         };
-        if(isEdit){ visitas=visitas.map(x=>x._id===item._id?nova:x); }
-        else visitas.unshift(nova);
-        saveVisitas(visitas); fw.innerHTML=""; renderLista();
-        toast(`✅ Visita ${isEdit?"atualizada":"registrada"}.`,"success");
+        await runWithUi(async()=>{
+          if(isEdit){
+            await DB.request(`/api/visitas/${encodeURIComponent(payload.id)}`,{method:"PUT",body:JSON.stringify(payload)});
+            visitas=visitas.map(x=>(x.id||x._id)===payload.id?{...x,...payload}:x);
+          } else {
+            const nova=await DB.request("/api/visitas",{method:"POST",body:JSON.stringify(payload)});
+            visitas=[{...payload,...(nova||{})}, ...visitas];
+          }
+          fw.innerHTML=""; renderLista();
+          toast(`✅ Visita ${isEdit?"atualizada":"registrada"}.`,"success");
+        },isEdit?"Salvando...":"Registrando...");
       });
       setTimeout(()=>fw.scrollIntoView({behavior:"smooth",block:"start"}),60);
       setTimeout(()=>bindVozNoCampo(fw),120);
@@ -3466,6 +3499,7 @@
             <button id="vis-nova-btn" class="btn btn-primary" style="width:auto;">+ Nova visita</button>
             <button id="vis-rel-btn" class="btn btn-secondary" style="font-size:12px;">📋 Relatório</button>
             <button id="vis-export-btn" class="btn btn-secondary" style="font-size:12px;">📤 CSV</button>
+            <button id="vis-refresh-btn" class="btn btn-secondary btn-icon" title="Atualizar">↻</button>
           </div>
         </div>
         ${renderFiltroPeriodo("_visFiltro")}
@@ -3473,15 +3507,25 @@
           <span class="search-icon">🔍</span>
           <input id="sv-vis-busca" type="search" placeholder="Buscar visitas..." autocomplete="off"/>
         </div>
-        <div style="margin-top:6px;font-size:12px;color:var(--muted);">${visitas.length} visita${visitas.length!==1?"s":""} registrada${visitas.length!==1?"s":""}</div>
+        <div id="sv-vis-count" style="margin-top:6px;font-size:12px;color:var(--muted);">Carregando...</div>
       </div>
       <div id="sv-vis-form"></div>
-      <div id="sv-vis-lista"></div>`;
+      <div id="sv-vis-lista"><div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">Carregando visitas...</div></div></div>`;
 
-    renderLista();
+    // Carregar da API
+    await runWithUi(async()=>{
+      await carregarVisitas();
+      const cnt=document.getElementById("sv-vis-count");
+      if(cnt) cnt.textContent=`${visitas.length} visita${visitas.length!==1?"s":""} registrada${visitas.length!==1?"s":""}`;
+      renderLista();
+    },"Carregando visitas...");
+
     document.getElementById("vis-nova-btn")?.addEventListener("click",()=>renderFormVisita(null));
     document.getElementById("vis-rel-btn")?.addEventListener("click",gerarRelatorioVisitas);
     document.getElementById("vis-export-btn")?.addEventListener("click",exportarVisitas);
+    document.getElementById("vis-refresh-btn")?.addEventListener("click",async()=>{
+      await runWithUi(async()=>{ await carregarVisitas(); renderLista(); toast("Atualizado.","success"); },"Atualizando...");
+    });
     document.getElementById("sv-vis-busca")?.addEventListener("input",renderLista);
     bindFiltroPeriodo("_visFiltro",renderLista);
   }
