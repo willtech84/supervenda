@@ -1270,6 +1270,94 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
         return json({ text });
       }
 
+      /** =================== CARTOES =================== **/
+      if (p[1] === "cartoes") {
+        if (req.method === "GET" && !p[2]) {
+          const rows = await env.DB.prepare(
+            "SELECT * FROM cartoes WHERE vendor_id=? ORDER BY created_at DESC"
+          ).bind(effectiveVendorId).all<any>();
+          return json(rows.results || []);
+        }
+        if (req.method === "POST") {
+          const body = await readJson<any>(req);
+          const id = String(body.id || "").trim() || ("CN-" + String(Date.now()).slice(-8));
+          await env.DB.prepare(
+            `INSERT INTO cartoes (id,vendor_id,nome,cargo,empresa,telefone,email,endereco,obs,foto,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)
+             ON CONFLICT(id) DO UPDATE SET
+               nome=excluded.nome,cargo=excluded.cargo,empresa=excluded.empresa,
+               telefone=excluded.telefone,email=excluded.email,endereco=excluded.endereco,
+               obs=excluded.obs,foto=excluded.foto`
+          ).bind(id, effectiveVendorId,
+            body.nome||"", body.cargo||"", body.empresa||"",
+            body.telefone||"", body.email||"", body.endereco||"",
+            body.obs||"", body.foto||"", nowISO()
+          ).run();
+          const row = await env.DB.prepare("SELECT * FROM cartoes WHERE id=?").bind(id).first<any>();
+          return json(row || { id });
+        }
+        if (req.method === "PUT" && p[2]) {
+          const body = await readJson<any>(req);
+          await env.DB.prepare(
+            `UPDATE cartoes SET nome=?,cargo=?,empresa=?,telefone=?,email=?,endereco=?,obs=?,foto=?
+             WHERE id=? AND vendor_id=?`
+          ).bind(body.nome||"", body.cargo||"", body.empresa||"",
+            body.telefone||"", body.email||"", body.endereco||"",
+            body.obs||"", body.foto||"", p[2], effectiveVendorId
+          ).run();
+          const row = await env.DB.prepare("SELECT * FROM cartoes WHERE id=?").bind(p[2]).first<any>();
+          return json(row || {});
+        }
+        if (req.method === "DELETE" && p[2]) {
+          await env.DB.prepare("DELETE FROM cartoes WHERE id=? AND vendor_id=?").bind(p[2], effectiveVendorId).run();
+          return json({ ok: true });
+        }
+      }
+
+      /** =================== VISITAS =================== **/
+      if (p[1] === "visitas") {
+        if (req.method === "GET" && !p[2]) {
+          const rows = await env.DB.prepare(
+            "SELECT * FROM visitas WHERE vendor_id=? ORDER BY data DESC, created_at DESC"
+          ).bind(effectiveVendorId).all<any>();
+          return json(rows.results || []);
+        }
+        if (req.method === "POST") {
+          const body = await readJson<any>(req);
+          const id = String(body.id || "").trim() || ("VS-" + String(Date.now()).slice(-8));
+          await env.DB.prepare(
+            `INSERT INTO visitas (id,vendor_id,nome,telefone,endereco,cidade,data,resultado,acao,obs,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)
+             ON CONFLICT(id) DO UPDATE SET
+               nome=excluded.nome,telefone=excluded.telefone,endereco=excluded.endereco,
+               cidade=excluded.cidade,data=excluded.data,resultado=excluded.resultado,
+               acao=excluded.acao,obs=excluded.obs`
+          ).bind(id, effectiveVendorId,
+            body.nome||"", body.telefone||"", body.endereco||"",
+            body.cidade||"", body.data||"", body.resultado||"",
+            body.acao||"", body.obs||"", nowISO()
+          ).run();
+          const row = await env.DB.prepare("SELECT * FROM visitas WHERE id=?").bind(id).first<any>();
+          return json(row || { id });
+        }
+        if (req.method === "PUT" && p[2]) {
+          const body = await readJson<any>(req);
+          await env.DB.prepare(
+            `UPDATE visitas SET nome=?,telefone=?,endereco=?,cidade=?,data=?,resultado=?,acao=?,obs=?
+             WHERE id=? AND vendor_id=?`
+          ).bind(body.nome||"", body.telefone||"", body.endereco||"",
+            body.cidade||"", body.data||"", body.resultado||"",
+            body.acao||"", body.obs||"", p[2], effectiveVendorId
+          ).run();
+          const row = await env.DB.prepare("SELECT * FROM visitas WHERE id=?").bind(p[2]).first<any>();
+          return json(row || {});
+        }
+        if (req.method === "DELETE" && p[2]) {
+          await env.DB.prepare("DELETE FROM visitas WHERE id=? AND vendor_id=?").bind(p[2], effectiveVendorId).run();
+          return json({ ok: true });
+        }
+      }
+
       return bad("Not found", 404);
     } catch (e: any) {
       return bad("Erro interno", 500, e?.message || String(e));
