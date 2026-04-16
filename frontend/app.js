@@ -4657,6 +4657,97 @@
   }
 
   // Init
+  // ── Migração única: dados do localStorage → API ───────────────────────────────
+  async function migrarLocalStorageParaAPI(){
+    const FLAG="sv_migrado_v29";
+    if(localStorage.getItem(FLAG)) return; // já migrado
+
+    let migrou=false;
+
+    // Migrar Cartões
+    try{
+      const cartoes=JSON.parse(localStorage.getItem("sv_cartoes")||"[]");
+      if(cartoes.length>0){
+        const toast_id="mig-cart";
+        toast(`📦 Migrando ${cartoes.length} cartão${cartoes.length!==1?"ões":""} para o servidor...`,"info",8000);
+        let ok=0;
+        for(const c of cartoes){
+          try{
+            await DB.request("/api/cartoes",{
+              method:"POST",
+              body:JSON.stringify({
+                id: c._id||c.id||("CN-"+Date.now()+"-"+Math.random().toString(36).slice(2,5)),
+                nome:     c.nome||"",
+                cargo:    c.cargo||"",
+                empresa:  c.empresa||"",
+                telefone: c.telefone||"",
+                email:    c.email||"",
+                endereco: c.endereco||"",
+                obs:      c.obs||"",
+                foto:     c.foto||"",
+              })
+            });
+            ok++;
+          }catch(e){ console.warn("Erro migrar cartão:",e?.message); }
+        }
+        if(ok>0){
+          toast(`✅ ${ok} cartão${ok!==1?"ões":""} migrado${ok!==1?"s":""} com sucesso!`,"success",4000);
+          migrou=true;
+        }
+      }
+    }catch(e){ console.warn("Migração cartões:",e?.message); }
+
+    // Migrar Visitas
+    try{
+      const visitas=JSON.parse(localStorage.getItem("sv_visitas")||"[]");
+      if(visitas.length>0){
+        toast(`📦 Migrando ${visitas.length} visita${visitas.length!==1?"s":""} para o servidor...`,"info",8000);
+        let ok=0;
+        for(const v of visitas){
+          try{
+            await DB.request("/api/visitas",{
+              method:"POST",
+              body:JSON.stringify({
+                id:       v._id||v.id||("VS-"+Date.now()+"-"+Math.random().toString(36).slice(2,5)),
+                nome:     v.nome||"",
+                telefone: v.telefone||"",
+                endereco: v.endereco||"",
+                cidade:   v.cidade||"",
+                data:     v.data||"",
+                resultado:v.resultado||"",
+                acao:     v.acao||"",
+                obs:      v.obs||"",
+              })
+            });
+            ok++;
+          }catch(e){ console.warn("Erro migrar visita:",e?.message); }
+        }
+        if(ok>0){
+          toast(`✅ ${ok} visita${ok!==1?"s":""} migrada${ok!==1?"s":""} com sucesso!`,"success",4000);
+          migrou=true;
+        }
+      }
+    }catch(e){ console.warn("Migração visitas:",e?.message); }
+
+    // Marcar como migrado e limpar localStorage antigo
+    try{
+      localStorage.setItem(FLAG,"1");
+      // Manter backup dos dados originais por segurança (com sufixo _bak)
+      if(localStorage.getItem("sv_cartoes")){
+        localStorage.setItem("sv_cartoes_bak",localStorage.getItem("sv_cartoes")||"");
+        localStorage.removeItem("sv_cartoes");
+      }
+      if(localStorage.getItem("sv_visitas")){
+        localStorage.setItem("sv_visitas_bak",localStorage.getItem("sv_visitas")||"");
+        localStorage.removeItem("sv_visitas");
+      }
+    }catch{}
+
+    if(migrou){
+      console.log("✅ Migração localStorage → API concluída.");
+    }
+  }
+
   async function init(){
     try{if(localStorage.getItem("sv_theme")==="light") document.body.classList.add("light-mode");}catch{}
 
@@ -4689,6 +4780,10 @@
         syncLoginWorkspace(); bindShell();
         renderNav();
         await runWithUi(preloadAll,"Carregando dados...");
+
+        // ── Migração única: localStorage → API (Cartões + Visitas) ────────────
+        await migrarLocalStorageParaAPI();
+
         const hash=(location.hash||"#dashboard").replace("#","")||"dashboard";
         state.route=getRoute(hash).id;
         renderNav(); renderCurrent();
