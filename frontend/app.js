@@ -63,6 +63,7 @@
     {id:"financeiro",  label:"Financeiro",  icon:"💰"},
     {id:"relatorios",  label:"Relatórios",  icon:"📈"},
     {id:"manuais",     label:"Manuais",     icon:"📚"},
+    {id:"vendas",      label:"Vendas",      icon:"💵"},
     {id:"visitas",     label:"Visitas",     icon:"🏢"},
     {id:"cartao",      label:"Cartões",     icon:"🪪"},
     {id:"rotas",       label:"Rotas",       icon:"🗺️", resource:"rotas"},
@@ -72,6 +73,20 @@
     {id:"usuarios",    label:"Usuários",    icon:"👤"},
   ];
   const BOTTOM_NAV=["dashboard","clientes","pedidos","mercadorias"];
+
+  // Ordem do menu lateral — personalizável e salva em localStorage
+  function getMenuOrder(){
+    try{
+      const saved=JSON.parse(localStorage.getItem("sv_menu_order")||"[]");
+      if(saved.length===ROUTES.length) return saved;
+    }catch{}
+    return ROUTES.map(r=>r.id);
+  }
+  function setMenuOrder(order){try{localStorage.setItem("sv_menu_order",JSON.stringify(order));}catch{}}
+  function getRoutesOrdenadas(){
+    const order=getMenuOrder();
+    return order.map(id=>ROUTES.find(r=>r.id===id)).filter(Boolean);
+  }
 
   function getRoute(id){return ROUTES.find(r=>r.id===id)||ROUTES[0];}
   function navigate(id){
@@ -105,14 +120,45 @@
   function renderNav(){
     const nav=$("#sidebar-nav");
     if(nav){
-      nav.innerHTML=`<div class="nav-section-label">Menu</div>`+ROUTES.filter(r=>rotaPermitida(r.id)).map(r=>`
-        <div class="nav-item ${state.route===r.id?"active":""}" data-nav="${esc(r.id)}">
+      const routesOrdenadas=getRoutesOrdenadas().filter(r=>rotaPermitida(r.id));
+      nav.innerHTML=`<div class="nav-section-label" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>Menu</span>
+        <span style="font-size:10px;color:var(--muted);font-weight:400;">✥ arraste para reordenar</span>
+      </div>`+routesOrdenadas.map(r=>`
+        <div class="nav-item ${state.route===r.id?"active":""}" data-nav="${esc(r.id)}" draggable="true" data-nav-id="${esc(r.id)}" style="cursor:grab;">
           <span class="nav-item-icon">${r.icon}</span>${esc(r.label)}
           ${r.id==="lembretes"&&pendentesCount()>0?`<span style="margin-left:auto;background:var(--amber);color:#000;border-radius:20px;font-size:10px;font-weight:700;padding:1px 6px;">${pendentesCount()}</span>`:""}
         </div>`).join("");
       $$(".nav-item[data-nav]",nav).forEach(el=>el.addEventListener("click",()=>navigate(el.getAttribute("data-nav"))));
+
+      // Drag-and-drop para reordenar
+      let dragId=null;
+      $$("[data-nav-id]",nav).forEach(el=>{
+        el.addEventListener("dragstart",e=>{
+          dragId=el.getAttribute("data-nav-id");
+          el.style.opacity="0.4";
+          e.dataTransfer.effectAllowed="move";
+        });
+        el.addEventListener("dragend",()=>{el.style.opacity="";dragId=null;});
+        el.addEventListener("dragover",e=>{e.preventDefault();el.style.background="rgba(0,230,118,.1)";});
+        el.addEventListener("dragleave",()=>{el.style.background="";});
+        el.addEventListener("drop",e=>{
+          e.preventDefault();
+          el.style.background="";
+          if(!dragId||dragId===el.getAttribute("data-nav-id")) return;
+          const order=getMenuOrder();
+          const fromIdx=order.indexOf(dragId);
+          const toIdx=order.indexOf(el.getAttribute("data-nav-id"));
+          if(fromIdx<0||toIdx<0) return;
+          order.splice(fromIdx,1);
+          order.splice(toIdx,0,dragId);
+          setMenuOrder(order);
+          renderNav();
+          toast("✅ Menu reordenado.","info",1500);
+        });
+      });
     }
-    // Bottom nav: filtrar itens permitidos
+
     const bottomPermitidos=BOTTOM_NAV.filter(id=>rotaPermitida(id));
     const bn=$("#bottom-nav-items");
     if(bn){
@@ -123,7 +169,7 @@
     }
     const mg=$("#more-drawer-grid");
     if(mg){
-      mg.innerHTML=ROUTES.filter(r=>!BOTTOM_NAV.includes(r.id)&&rotaPermitida(r.id)).map(r=>`
+      mg.innerHTML=getRoutesOrdenadas().filter(r=>!BOTTOM_NAV.includes(r.id)&&rotaPermitida(r.id)).map(r=>`
         <div class="more-drawer-item ${state.route===r.id?"active":""}" data-nav="${esc(r.id)}">
           <span class="icon">${r.icon}</span>${esc(r.label)}
           ${r.id==="lembretes"&&pendentesCount()>0?`<br><span style="font-size:10px;color:var(--amber);">${pendentesCount()} pendente${pendentesCount()>1?"s":""}</span>`:""}
@@ -488,6 +534,7 @@
       renderRelatorios(root);return;
     }
     if(route.id==="manuais"){renderManuais(root);return;}
+    if(route.id==="vendas"){renderVendas(root);return;}
     if(route.id==="visitas"){renderVisitas(root);return;}
     if(route.id==="cartao"){renderCartoes(root);return;}
     if(route.id==="rotas"){
@@ -1264,7 +1311,7 @@
       });
     }
 
-    function addItemManual(){
+    function addItemManual(salvarMerc=false){
       const nome=String(wrap.querySelector("#ped-item-nome")?.value||"").trim().toUpperCase();
       const qtd=Number(String(wrap.querySelector("#ped-item-qtd")?.value||"1").replace(",","."))||1;
       const val=Number(String(wrap.querySelector("#ped-item-val")?.value||"0").replace(",","."))||0;
@@ -1274,6 +1321,17 @@
       wrap.querySelector("#ped-item-qtd").value="1";
       wrap.querySelector("#ped-item-val").value="";
       renderItens();
+      // Salvar em mercadorias se solicitado
+      if(salvarMerc&&nome){
+        DB.create("mercadorias",{
+          nome,produto:nome,codigo:"",sku:"",marca:"",categoria:"",
+          valor_venda:val,valorVenda:val,valor_compra:0,valorCompra:0,
+          estoque:0,estoqueAtual:0,estoqueMin:0,descricao:"",
+        }).then(()=>{
+          loadResource("mercadorias");
+          toast(`✅ "${nome}" salvo em Mercadorias.`,"success",3000);
+        }).catch(()=>toast("Erro ao salvar em Mercadorias.","error"));
+      }
     }
 
     function addFromEstoque(m){
@@ -1372,11 +1430,14 @@
 
           <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px;">
             <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;">➕ Adicionar item manualmente</div>
-            <div style="display:grid;grid-template-columns:1fr 70px 100px auto;gap:6px;align-items:flex-end;">
+            <div style="display:grid;grid-template-columns:1fr 70px 100px;gap:6px;align-items:flex-end;margin-bottom:6px;">
               <div><label style="font-size:11px;color:var(--muted);">Produto</label><input type="text" id="ped-item-nome" placeholder="Nome do item" style="${inStyleSm}"/></div>
               <div><label style="font-size:11px;color:var(--muted);">Qtd</label><input type="number" id="ped-item-qtd" value="1" min="0.01" step="0.01" style="${inStyleSm}text-align:center;"/></div>
               <div><label style="font-size:11px;color:var(--muted);">Valor unit.</label><input type="text" inputmode="decimal" id="ped-item-val" placeholder="0,00" style="${inStyleSm}text-align:right;"/></div>
-              <button type="button" id="ped-add-manual" class="btn btn-secondary" style="padding:9px 12px;white-space:nowrap;">+ Add</button>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button type="button" id="ped-add-manual" class="btn btn-secondary" style="flex:1;">+ Add ao pedido</button>
+              <button type="button" id="ped-add-salvar-merc" class="btn btn-secondary" style="flex:1;font-size:12px;color:var(--blue);border-color:rgba(68,136,255,.3);background:rgba(68,136,255,.07);" title="Adiciona ao pedido E salva em Mercadorias">+ Add + 📦 Salvar</button>
             </div>
           </div>
 
@@ -1432,7 +1493,8 @@
     }
 
     wrap.querySelector("#ped-cat-search")?.addEventListener("input",e=>renderCatalogo(e.target.value));
-    wrap.querySelector("#ped-add-manual")?.addEventListener("click",addItemManual);
+    wrap.querySelector("#ped-add-manual")?.addEventListener("click",()=>addItemManual(false));
+    wrap.querySelector("#ped-add-salvar-merc")?.addEventListener("click",()=>addItemManual(true));
     $("#sv-close-form")?.addEventListener("click",()=>{wrap.innerHTML="";});
     $("#sv-cancel-form")?.addEventListener("click",()=>{wrap.innerHTML="";});
 
@@ -2447,30 +2509,74 @@
   function renderFiltroPeriodo(chaveState, onChangeCb){
     if(!state[chaveState]) state[chaveState]="tudo";
     const f=state[chaveState];
-    const html=`<div style="display:flex;gap:6px;margin-top:10px;">
-      <button class="btn-periodo btn ${f==="hoje"?"btn-primary":"btn-secondary"}" data-fp="hoje" style="font-size:12px;flex:1;">📅 Hoje</button>
-      <button class="btn-periodo btn ${f==="semana"?"btn-primary":"btn-secondary"}" data-fp="semana" style="font-size:12px;flex:1;">📆 Semana</button>
-      <button class="btn-periodo btn ${f==="mes"?"btn-primary":"btn-secondary"}" data-fp="mes" style="font-size:12px;flex:1;">🗓️ Mês</button>
-      <button class="btn-periodo btn ${f==="tudo"?"btn-primary":"btn-secondary"}" data-fp="tudo" style="font-size:12px;flex:1;">📋 Todos</button>
+    const dataKey=chaveState+"_data";
+    if(!state[dataKey]) state[dataKey]="";
+    const html=`<div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;">
+      <div style="display:flex;gap:6px;">
+        <button class="btn-periodo btn ${f==="hoje"?"btn-primary":"btn-secondary"}" data-fp="hoje" style="font-size:12px;flex:1;">📅 Hoje</button>
+        <button class="btn-periodo btn ${f==="semana"?"btn-primary":"btn-secondary"}" data-fp="semana" style="font-size:12px;flex:1;">📆 Semana</button>
+        <button class="btn-periodo btn ${f==="mes"?"btn-primary":"btn-secondary"}" data-fp="mes" style="font-size:12px;flex:1;">🗓️ Mês</button>
+        <button class="btn-periodo btn ${f==="tudo"?"btn-primary":"btn-secondary"}" data-fp="tudo" style="font-size:12px;flex:1;">📋 Todos</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="date" class="btn-data-especifica" value="${esc(state[dataKey]||"")}"
+          style="flex:1;padding:8px 10px;background:var(--bg);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;"/>
+        <button class="btn-data-limpar btn btn-ghost" style="font-size:12px;padding:7px 10px;white-space:nowrap;" title="Limpar data">✕ Data</button>
+      </div>
     </div>`;
     return html;
   }
 
   function bindFiltroPeriodo(chaveState, cb){
+    const dataKey=chaveState+"_data";
     document.querySelectorAll(".btn-periodo").forEach(btn=>{
       btn.addEventListener("click",()=>{
         state[chaveState]=btn.getAttribute("data-fp")||"tudo";
+        state[dataKey]=""; // limpar data ao escolher período
         document.querySelectorAll(".btn-periodo").forEach(b=>{
           b.className=b.className.replace("btn-primary","btn-secondary");
         });
         btn.className=btn.className.replace("btn-secondary","btn-primary");
+        // Limpar input de data
+        const di=document.querySelector(".btn-data-especifica");
+        if(di) di.value="";
         cb();
       });
+    });
+    // Filtro por data específica
+    document.querySelector(".btn-data-especifica")?.addEventListener("change",e=>{
+      state[dataKey]=e.target.value||"";
+      if(state[dataKey]){
+        // Desativar botões de período
+        document.querySelectorAll(".btn-periodo").forEach(b=>{
+          b.className=b.className.replace("btn-primary","btn-secondary");
+        });
+        state[chaveState]="data_especifica";
+      }
+      cb();
+    });
+    // Limpar data
+    document.querySelector(".btn-data-limpar")?.addEventListener("click",()=>{
+      state[dataKey]="";
+      state[chaveState]="tudo";
+      const di=document.querySelector(".btn-data-especifica");
+      if(di) di.value="";
+      document.querySelectorAll(".btn-periodo").forEach(b=>{
+        b.className=b.className.replace("btn-primary","btn-secondary");
+        if(b.getAttribute("data-fp")==="tudo") b.className=b.className.replace("btn-secondary","btn-primary");
+      });
+      cb();
     });
   }
 
   function filtrarPorPeriodoGen(items, campoData, chaveState){
     const f=state[chaveState]||"tudo";
+    const dataKey=chaveState+"_data";
+    const dataEsp=state[dataKey]||"";
+    // Filtro por data específica
+    if(f==="data_especifica"&&dataEsp){
+      return items.filter(it=>String(it[campoData]||"").slice(0,10)===dataEsp);
+    }
     if(f==="tudo") return items;
     const hoje=new Date().toISOString().slice(0,10);
     const mesAtual=new Date().toISOString().slice(0,7);
@@ -3858,6 +3964,184 @@
         renderManuais(root);
       },"Atualizando...");
     });
+  }
+
+  // ─── Vendas Diárias ───────────────────────────────────────────────────────────
+  async function renderVendas(root){
+    const KEY="sv_vendas_diarias";
+    const lerVendas=()=>{try{return JSON.parse(localStorage.getItem(KEY)||"[]");}catch{return[];}};
+    const gravarVendas=v=>{try{localStorage.setItem(KEY,JSON.stringify(v));}catch{}};
+    let vendas=lerVendas();
+
+    if(!state._venFiltro) state._venFiltro="tudo";
+
+    const inStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;`;
+
+    function totalFiltrado(lista){return lista.reduce((s,v)=>s+Number(v.valor||0),0);}
+
+    function getVendasFiltradas(){
+      return filtrarPorPeriodoGen(vendas,"data","_venFiltro");
+    }
+
+    function renderResumo(lista){
+      const loja=lista.filter(v=>v.tipo==="LOJA").reduce((s,v)=>s+Number(v.valor||0),0);
+      const ext=lista.filter(v=>v.tipo==="EXTERNA").reduce((s,v)=>s+Number(v.valor||0),0);
+      const total=loja+ext;
+      return`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;">
+        <div style="background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.2);border-radius:10px;padding:10px;text-align:center;">
+          <div style="font-size:18px;font-weight:700;color:var(--green);">${moneyBR(total)}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">Total</div>
+        </div>
+        <div style="background:rgba(68,136,255,.08);border:1px solid rgba(68,136,255,.2);border-radius:10px;padding:10px;text-align:center;">
+          <div style="font-size:16px;font-weight:700;color:var(--blue);">${moneyBR(loja)}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">🏪 Loja</div>
+        </div>
+        <div style="background:rgba(255,179,0,.08);border:1px solid rgba(255,179,0,.2);border-radius:10px;padding:10px;text-align:center;">
+          <div style="font-size:16px;font-weight:700;color:var(--amber);">${moneyBR(ext)}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">🚗 Externa</div>
+        </div>
+      </div>`;
+    }
+
+    function renderLista(){
+      const lista=document.getElementById("sv-ven-lista"); if(!lista) return;
+      const filtradas=getVendasFiltradas();
+      const resumoEl=document.getElementById("sv-ven-resumo");
+      if(resumoEl) resumoEl.innerHTML=renderResumo(filtradas);
+      const cnt=document.getElementById("sv-ven-count");
+      if(cnt) cnt.textContent=`${filtradas.length} lançamento${filtradas.length!==1?"s":""}`;
+      if(!filtradas.length){
+        lista.innerHTML=`<div class="empty-state"><div class="empty-icon">💵</div><div class="empty-text">Nenhum lançamento no período.</div></div>`;
+        return;
+      }
+      lista.innerHTML=filtradas.map(v=>`
+        <div class="list-item">
+          <div class="list-item-top">
+            <div>
+              <div class="list-item-title">${moneyBR(v.valor||0)}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px;">${v.obs||""}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;">
+              <span class="badge ${v.tipo==="LOJA"?"badge-blue":"badge-muted"}">${v.tipo==="LOJA"?"🏪 Loja":"🚗 Externa"}</span>
+              <div style="font-size:12px;color:var(--muted);margin-top:4px;">${v.data?dateFormatBR(v.data):""}</div>
+            </div>
+          </div>
+          <div class="list-item-actions">
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-ven-edit="${esc(v._id)}">✏️ Editar</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-ven-del="${esc(v._id)}">🗑️</button>
+          </div>
+        </div>`).join("");
+
+      lista.querySelectorAll("[data-ven-edit]").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          const v=vendas.find(x=>x._id===btn.getAttribute("data-ven-edit"));
+          if(v) renderFormVenda(v);
+        });
+      });
+      lista.querySelectorAll("[data-ven-del]").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          if(!confirm("Excluir este lançamento?")) return;
+          vendas=vendas.filter(x=>x._id!==btn.getAttribute("data-ven-del"));
+          gravarVendas(vendas); renderLista();
+          toast("Lançamento excluído.","info");
+        });
+      });
+    }
+
+    function renderFormVenda(item=null){
+      const fw=document.getElementById("sv-ven-form"); if(!fw) return;
+      const isEdit=!!item;
+      fw.innerHTML=`
+        <div class="form-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div style="font-size:15px;font-weight:600;">${isEdit?"✏️ Editar":"➕ Novo"} lançamento</div>
+            <button type="button" id="ven-close" class="btn btn-ghost btn-icon">✕</button>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>Data *</label><input id="ven-data" type="date" value="${esc(item?.data||new Date().toISOString().slice(0,10))}" style="${inStyle}"/></div>
+            <div class="field">
+              <label>Canal *</label>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;">
+                <label style="display:flex;align-items:center;gap:8px;padding:12px;background:var(--bg2);border:2px solid ${item?.tipo==="LOJA"?"var(--blue)":"var(--border)"};border-radius:10px;cursor:pointer;">
+                  <input type="radio" name="ven-tipo" value="LOJA" ${(!item||item.tipo==="LOJA")?"checked":""} style="width:16px;height:16px;accent-color:var(--blue);"/>
+                  <span style="font-size:14px;font-weight:600;">🏪 Loja</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;padding:12px;background:var(--bg2);border:2px solid ${item?.tipo==="EXTERNA"?"var(--amber)":"var(--border)"};border-radius:10px;cursor:pointer;">
+                  <input type="radio" name="ven-tipo" value="EXTERNA" ${item?.tipo==="EXTERNA"?"checked":""} style="width:16px;height:16px;accent-color:var(--amber);"/>
+                  <span style="font-size:14px;font-weight:600;">🚗 Externa</span>
+                </label>
+              </div>
+            </div>
+            <div class="field"><label>Valor (R$) *</label><input id="ven-valor" type="text" inputmode="decimal" value="${esc(item?.valor?String(item.valor).replace(".",","):"")}" placeholder="0,00" style="${inStyle}text-align:right;"/></div>
+            <div class="field"><label>Observação</label><input id="ven-obs" type="text" value="${esc(item?.obs||"")}" placeholder="Descrição opcional..." style="${inStyle}"/></div>
+          </div>
+          <div class="form-actions">
+            <button type="button" id="ven-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Lançar"}</button>
+            <button type="button" id="ven-cancel" class="btn btn-ghost">Cancelar</button>
+          </div>
+        </div>`;
+      setTimeout(()=>fw.scrollIntoView({behavior:"smooth",block:"start"}),60);
+      document.getElementById("ven-close")?.addEventListener("click",()=>{fw.innerHTML="";});
+      document.getElementById("ven-cancel")?.addEventListener("click",()=>{fw.innerHTML="";});
+
+      // Highlight dos radio ao mudar
+      fw.querySelectorAll("[name='ven-tipo']").forEach(r=>{
+        r.addEventListener("change",()=>{
+          fw.querySelectorAll("[name='ven-tipo']").forEach(x=>{
+            x.closest("label").style.borderColor=x.checked?(x.value==="LOJA"?"var(--blue)":"var(--amber)"):"var(--border)";
+          });
+        });
+      });
+
+      document.getElementById("ven-salvar")?.addEventListener("click",()=>{
+        const data=document.getElementById("ven-data")?.value;
+        const tipo=fw.querySelector("[name='ven-tipo']:checked")?.value||"LOJA";
+        const valor=Number(String(document.getElementById("ven-valor")?.value||"0").replace(",",".").replace(/[^\d.]/g,""))||0;
+        const obs=String(document.getElementById("ven-obs")?.value||"").trim();
+        if(!data){toast("Informe a data.","warning");return;}
+        if(!valor){toast("Informe o valor.","warning");return;}
+        const novo={_id:item?._id||("VD-"+Date.now()),data,tipo,valor,obs};
+        if(isEdit) vendas=vendas.map(x=>x._id===item._id?novo:x);
+        else vendas.unshift(novo);
+        gravarVendas(vendas); fw.innerHTML=""; renderLista();
+        toast(`✅ Lançamento ${isEdit?"atualizado":"salvo"}.`,"success");
+      });
+    }
+
+    // Exportar CSV
+    function exportarVendas(){
+      const filtradas=getVendasFiltradas();
+      if(!filtradas.length){toast("Nenhum dado para exportar.","warning");return;}
+      const csv="\uFEFF"+["Data;Canal;Valor;Observação",
+        ...filtradas.map(v=>`${dateFormatBR(v.data)};${v.tipo};${String(v.valor||0).replace(".",",")};${v.obs||""}`)
+      ].join("\n");
+      const a=Object.assign(document.createElement("a"),{
+        href:URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"})),
+        download:`vendas_${new Date().toISOString().slice(0,10)}.csv`
+      });
+      a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    }
+
+    root.innerHTML=`
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <div class="card-title">💵 Vendas Diárias</div>
+          <div style="display:flex;gap:6px;">
+            <button id="ven-novo-btn" class="btn btn-primary" style="width:auto;">+ Lançar venda</button>
+            <button id="ven-export-btn" class="btn btn-secondary" style="font-size:12px;">📤 CSV</button>
+          </div>
+        </div>
+        ${renderFiltroPeriodo("_venFiltro")}
+        <div id="sv-ven-count" style="margin-top:6px;font-size:12px;color:var(--muted);"></div>
+      </div>
+      <div id="sv-ven-resumo"></div>
+      <div id="sv-ven-form"></div>
+      <div id="sv-ven-lista"></div>`;
+
+    renderLista();
+    document.getElementById("ven-novo-btn")?.addEventListener("click",()=>renderFormVenda(null));
+    document.getElementById("ven-export-btn")?.addEventListener("click",exportarVendas);
+    bindFiltroPeriodo("_venFiltro",renderLista);
   }
 
   // ─── Rotas com Geolocalização ─────────────────────────────────────────────────
