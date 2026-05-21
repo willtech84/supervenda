@@ -1,65 +1,16 @@
 (function () {
   const DB = window.DB;
 
-  // ── Sistema Offline: IndexedDB para fila de operações ─────────────────────
-  const _OFFLINE_DB = 'sv_offline', _OFFLINE_ST = 'queue';
-  let _idb = null;
-
-  async function _abrirIDB() {
-    if (_idb) return _idb;
-    return new Promise((res, rej) => {
-      const r = indexedDB.open(_OFFLINE_DB, 1);
-      r.onupgradeneeded = e => {
-        if (!e.target.result.objectStoreNames.contains(_OFFLINE_ST))
-          e.target.result.createObjectStore(_OFFLINE_ST, { keyPath: 'id', autoIncrement: true });
-      };
-      r.onsuccess = e => { _idb = e.target.result; res(_idb); };
-      r.onerror = () => rej(r.error);
-    });
-  }
-  async function _enfileirar(op) {
-    try { const db=await _abrirIDB(); const tx=db.transaction(_OFFLINE_ST,'readwrite'); tx.objectStore(_OFFLINE_ST).add({...op,ts:Date.now()}); }
-    catch(e){console.warn('fila:',e);}
-  }
-  async function _lerFila() {
-    try { const db=await _abrirIDB(); return new Promise((res,rej)=>{const tx=db.transaction(_OFFLINE_ST,'readonly');const r=tx.objectStore(_OFFLINE_ST).getAll();r.onsuccess=()=>res(r.result||[]);r.onerror=()=>rej(r.error);}); }
-    catch{return[];}
-  }
-  async function _removerFila(id) {
-    try { const db=await _abrirIDB(); const tx=db.transaction(_OFFLINE_ST,'readwrite'); tx.objectStore(_OFFLINE_ST).delete(id); }
-    catch{}
-  }
-
-  // Wrapper: intercepta DB.request e enfileira se offline
-  const _origReq = DB.request.bind(DB);
-  DB.request = async function(url, opts={}) {
-    if(!opts.method||opts.method==='GET'){
-      try{return await _origReq(url,opts);}
-      catch(e){if(!navigator.onLine) return null; throw e;}
-    }
-    try{return await _origReq(url,opts);}
-    catch(e){
-      if(!navigator.onLine||String(e?.message||'').includes('fetch')){
-        await _enfileirar({url,method:opts.method,body:opts.body||null});
-        throw Object.assign(new Error('💾 Salvo offline — será sincronizado ao reconectar.'),{offline:true});
-      }
-      throw e;
-    }
+  // Expor funções globais para o db.js usar após inicialização
+  // São preenchidas depois que as funções são declaradas no closure
+  window._svReloadAll = async () => {
+    try {
+      // preloadAll e renderCurrent são definidas mais abaixo no closure
+      // mas window._svPreloadAll e window._svRenderCurrent são expostas na init()
+      if (window._svPreloadAll) await window._svPreloadAll();
+      if (window._svRenderCurrent) window._svRenderCurrent();
+    } catch(e) { console.warn('reloadAll:', e); }
   };
-
-  // Registrar Service Worker
-  if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('/sw.js',{scope:'/'})
-      .then(reg=>{
-        setInterval(()=>reg.update(),60000);
-        navigator.serviceWorker.addEventListener('message',e=>{
-          if(e.data?.type==='PROCESS_QUEUE') window._svSyncFila?.(true);
-        });
-      }).catch(e=>console.warn('SW:',e));
-  }
-
-  // Expor função de sync para uso global (bindada após init)
-  window._svSyncFila = null;
 
   const state = {
     route: "dashboard",
@@ -103,27 +54,29 @@
     el.innerHTML=`<span style="color:${bd};font-weight:700;">${ic}</span><span>${esc(String(msg||""))}</span>`;
     w.appendChild(el); setTimeout(()=>{el.style.transition="opacity .2s";el.style.opacity="0";setTimeout(()=>el.remove(),220);},ms);
   }
+  // Expor toast globalmente para db.js usar
+  window.toast = toast;
 
   function setLoading(on,text="Carregando...") {
     const el=$("#sv-loading"),txt=$("#sv-loading-text");
     if(txt) txt.textContent=text; if(el) el.style.display=on?"flex":"none";
   }
+  const OFFLINE_RESULT = Symbol('offline');
+
   async function runWithUi(fn, text) {
     try {
       setLoading(true, text||"Processando...");
       return await fn();
     } catch(e) {
-      console.error(e);
-      // Erro offline: mostrar mensagem especial mas não tratar como falha crítica
       if(e?.offline) {
+        // Operação salva na fila — feedback visual, não é erro crítico
         toast(e.message||"💾 Salvo offline — será sincronizado ao reconectar.", "warning", 5000);
-        // Atualizar badge do botão sync
         const badge=document.getElementById("sv-offline-badge");
-        if(badge){badge.style.display="inline-flex"; badge.textContent="!";}
-      } else {
-        toast(e?.message||"Erro inesperado", "error", 5000);
-        throw e;
+        if(badge){badge.style.display="inline-flex";}
+        return OFFLINE_RESULT; // indica que foi salvo offline
       }
+      toast(e?.message||"Erro inesperado", "error", 5000);
+      throw e;
     } finally {
       setLoading(false);
     }
@@ -5075,6 +5028,9 @@
   }
 
   async function init(){
+    // Expor para _svReloadAll do db.js
+    window._svPreloadAll = preloadAll;
+    window._svRenderCurrent = renderCurrent;
     try{if(localStorage.getItem("sv_theme")==="light") document.body.classList.add("light-mode");}catch{}
 
     bindAuthForms();
@@ -5199,40 +5155,7 @@
     }
     // ── Sync de fila offline ──────────────────────────────────────────────────
     async function processarFilaOffline(silencioso=false){
-      const fila=await _lerFila();
-      if(!fila.length) return;
-      if(!silencioso) toast(`📡 Sincronizando ${fila.length} operação${fila.length!==1?"ões":""}...`,"info",5000);
-      let ok=0,erros=0;
-      for(const op of fila){
-        try{
-          const resp=await fetch(op.url,{
-            method:op.method,
-            headers:{"Content-Type":"application/json","Authorization":`Bearer ${DB.getToken()}`},
-            body:op.body||undefined,
-          });
-          if(resp.ok||resp.status<500) await _removerFila(op.id), ok++;
-          else{erros++;break;}
-        }catch{erros++;break;}
-      }
-      if(ok>0){
-        toast(`✅ ${ok} operação${ok!==1?"ões":""} sincronizada${ok!==1?"s":""}!`,"success",4000);
-        await preloadAll(); renderCurrent();
-      }
-      if(erros>0&&!silencioso) toast(`⚠️ ${erros} operação${erros!==1?"ões":""} ainda pendente${erros!==1?"s":""}.`,"warning",3000);
-      // Atualizar badge
-      atualizarBadgeOffline();
-    }
-
-    function atualizarBadgeOffline(){
-      _lerFila().then(fila=>{
-        const el=document.getElementById("sv-offline-badge");
-        if(!el) return;
-        if(fila.length>0&&!navigator.onLine){
-          el.style.display="inline-flex"; el.textContent=fila.length;
-        } else {
-          el.style.display="none";
-        }
-      });
+      await DB.processQueue(silencioso);
     }
 
     function atualizarBarraOnline(online){
@@ -5241,28 +5164,24 @@
       el.style.display=online?"none":"flex";
     }
 
-    // Monitorar conexão
-    window.addEventListener("online",async()=>{
-      atualizarBarraOnline(true);
-      toast("📶 Conexão restaurada!","success",2000);
-      setTimeout(()=>processarFilaOffline(false),1500);
-    });
-    window.addEventListener("offline",()=>{
-      atualizarBarraOnline(false);
-      toast("⚡ Sem internet — modo offline ativado.","warning",4000);
-    });
-
-    // Inicializar status
+    // Inicializar status visual
     atualizarBarraOnline(navigator.onLine);
-    atualizarBadgeOffline();
 
-    // Expor globalmente
-    window._svSyncFila=processarFilaOffline;
+    // Registrar Service Worker
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.register('/sw.js',{scope:'/'})
+        .then(reg=>{
+          setInterval(()=>reg.update(),60000);
+          navigator.serviceWorker.addEventListener('message',e=>{
+            if(e.data?.type==='PROCESS_QUEUE') DB.processQueue(true);
+          });
+        }).catch(e=>console.warn('SW:',e));
+    }
 
     // Sync manual pelo botão ⟳
     window._svSync=async()=>{
       if(window._svFormAberto()){toast("Feche o formulário antes de sincronizar.","warning",2500);return;}
-      await processarFilaOffline(false);
+      await DB.processQueue(false);
       await Promise.allSettled(SYNC_RECURSOS.map(r=>loadResource(r)));
       const hora=new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"});
       const si=document.getElementById("sv-sync-indicator");
