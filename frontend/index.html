@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <link rel="manifest" href="/manifest.json" />
   <title>Supervenda</title>
   <meta name="theme-color" content="#080f1e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -993,8 +994,10 @@
           <h1 class="topbar-title" id="topbar-title">Dashboard</h1>
         </div>
         <div class="topbar-right">
-          <span id="sv-sync-indicator" title="Última atualização" style="font-size:10px;color:var(--muted);margin-right:4px;"></span>
-          <button class="btn btn-ghost btn-icon" id="btn-sync-manual" title="Sincronizar dados agora" style="font-size:15px;">⟳</button>
+          <span id="sv-sync-indicator" title="Última atualização" style="font-size:10px;color:var(--muted);margin-right:2px;"></span>
+          <button class="btn btn-ghost btn-icon" id="btn-sync-manual" title="Sincronizar" style="font-size:15px;position:relative;">⟳
+            <span id="sv-offline-badge" style="display:none;position:absolute;top:2px;right:2px;background:var(--amber);color:#000;border-radius:50%;width:14px;height:14px;font-size:9px;font-weight:700;align-items:center;justify-content:center;line-height:14px;text-align:center;"></span>
+          </button>
           <button class="btn btn-ghost btn-icon" id="btn-theme" title="Alternar modo claro/escuro" style="font-size:16px;">🌙</button>
           <button class="btn btn-ghost btn-icon" id="btn-backup" title="Backup" style="display:none" class="desktop-only">💾</button>
           <div class="user-menu-wrap">
@@ -1012,6 +1015,12 @@
           </div>
         </div>
       </header>
+
+      <!-- Barra de status offline -->
+      <div id="sv-online-status" style="display:none;background:rgba(255,179,0,.12);border-bottom:1px solid rgba(255,179,0,.25);padding:6px 16px;font-size:12px;color:var(--amber,#f59e0b);align-items:center;gap:8px;">
+        <span style="font-size:16px;">⚡</span>
+        <span>Modo offline — alterações salvas localmente e sincronizadas ao reconectar</span>
+      </div>
 
       <div class="page-content">
         <div id="sv-screen-root"></div>
