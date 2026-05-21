@@ -757,36 +757,15 @@
     const cacheKey=resource;
     const rawItems=safeArray(state.cache[cacheKey]);
 
-    const hoje=new Date().toISOString().slice(0,10);
-    const mesAtual=new Date().toISOString().slice(0,7);
-    const semanaAtras=new Date(Date.now()-7*24*60*60*1000).toISOString().slice(0,10);
     if(!state._pedFiltro) state._pedFiltro="tudo";
     if(!state._lemFiltro) state._lemFiltro="tudo";
 
     const getFiltered=()=>{
       const q=String(state.ui.search||"").trim().toLowerCase();
       let items=rawItems.map(it=>normalizeItem(resource,it));
-      // Filtro de período nos pedidos
-      if(resource==="pedidos"&&state._pedFiltro!=="tudo"){
-        items=items.filter(it=>{
-          const d=String(it.data||"").slice(0,10);
-          if(state._pedFiltro==="hoje")   return d===hoje;
-          if(state._pedFiltro==="semana") return d>=semanaAtras&&d<=hoje;
-          if(state._pedFiltro==="mes")    return d.startsWith(mesAtual);
-          return true;
-        });
-      }
-      // Filtro de período nos lembretes
-      if(resource==="lembretes"&&state._lemFiltro!=="tudo"){
-        items=items.filter(it=>{
-          const d=String(it.data||"").slice(0,10);
-          if(!d) return state._lemFiltro==="tudo";
-          if(state._lemFiltro==="hoje")   return d===hoje;
-          if(state._lemFiltro==="semana") return d>=semanaAtras&&d<=hoje;
-          if(state._lemFiltro==="mes")    return d.startsWith(mesAtual);
-          return true;
-        });
-      }
+      // Filtro de período — usa filtrarPorPeriodoGen que trata data_especifica também
+      if(resource==="pedidos")  items=filtrarPorPeriodoGen(items,"data","_pedFiltro");
+      if(resource==="lembretes") items=filtrarPorPeriodoGen(items,"data","_lemFiltro");
       return !q?items:items.filter(it=>Object.values(it||{}).some(v=>String(v??"").toLowerCase().includes(q)));
     };
 
@@ -3371,25 +3350,13 @@
     function renderLista(){
       const lista=document.getElementById("sv-vis-lista"); if(!lista) return;
       const q=String(document.getElementById("sv-vis-busca")?.value||"").toLowerCase();
-      const hoje=new Date().toISOString().slice(0,10);
-      const mesAtual=new Date().toISOString().slice(0,7);
-      const semanaAtras=new Date(Date.now()-7*24*60*60*1000).toISOString().slice(0,10);
-      let filtradas=q?visitas.filter(v=>
+      // Usar filtrarPorPeriodoGen que trata Hoje/Semana/Mês/data_especifica
+      let filtradas=filtrarPorPeriodoGen(visitas,"data","_visFiltro");
+      if(q) filtradas=filtradas.filter(v=>
         String(v.nome||"").toLowerCase().includes(q)||
         String(v.telefone||"").toLowerCase().includes(q)||
         String(v.obs||"").toLowerCase().includes(q)
-      ):[...visitas];
-      // Filtro de período
-      if(state._visFiltro!=="tudo"){
-        filtradas=filtradas.filter(v=>{
-          const d=String(v.data||"").slice(0,10);
-          if(!d) return false;
-          if(state._visFiltro==="hoje")   return d===hoje;
-          if(state._visFiltro==="semana") return d>=semanaAtras&&d<=hoje;
-          if(state._visFiltro==="mes")    return d.startsWith(mesAtual);
-          return true;
-        });
-      }
+      );
       if(!filtradas.length){
         lista.innerHTML=`<div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">${q?"Nenhuma visita encontrada.":"Nenhuma visita registrada ainda."}</div></div>`;
         return;
@@ -5163,6 +5130,18 @@
       const h=(location.hash||"#dashboard").replace("#","")||"dashboard";
       state.route=getRoute(h).id; state.ui.search=""; renderNav(); renderCurrent();
     });
+
+    // Re-renderizar nav ao mudar orientação (vertical ↔ horizontal)
+    let _orientTimer=null;
+    window.addEventListener("resize",()=>{
+      clearTimeout(_orientTimer);
+      _orientTimer=setTimeout(()=>{
+        renderNav(); // reconstrói bottom nav e more drawer para novo tamanho
+      },200);
+    });
+    // Também escutar orientationchange para Android mais antigo
+    screen.orientation?.addEventListener("change",()=>{ renderNav(); });
+    window.addEventListener("orientationchange",()=>{ setTimeout(renderNav,300); });
 
     // ── Sync multi-usuário ──────────────────────────────────────────────────────
     // Recursos que precisam de sync (excluir notas que são pessoais)
