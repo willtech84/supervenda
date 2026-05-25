@@ -1358,6 +1358,113 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
         }
       }
 
+      /** =================== CONTROLE DE ESTOQUE =================== **/
+
+      // Tabelas de estoque (ex: "Estoque Ferramentas", "Estoque Elétrico")
+      if (p[1] === "estoque-tabelas") {
+        if (req.method === "GET") {
+          const rows = await env.DB.prepare(
+            "SELECT * FROM estoque_tabelas WHERE vendor_id=? ORDER BY created_at DESC"
+          ).bind(effectiveVendorId).all<any>();
+          return json(rows.results || []);
+        }
+        if (req.method === "POST") {
+          const body = await readJson<any>(req);
+          const id = "ET-" + String(Date.now()).slice(-8);
+          await env.DB.prepare(
+            `INSERT INTO estoque_tabelas (id,vendor_id,titulo,descricao,created_at)
+             VALUES (?,?,?,?,?)`
+          ).bind(id, effectiveVendorId, body.titulo||"Nova Tabela", body.descricao||"", nowISO()).run();
+          await logAtividade("criar","estoque",`Tabela "${body.titulo||"Nova Tabela"}"`);
+          return json({ id, titulo: body.titulo||"Nova Tabela" });
+        }
+        if (req.method === "PUT" && p[2]) {
+          const body = await readJson<any>(req);
+          await env.DB.prepare(
+            "UPDATE estoque_tabelas SET titulo=?,descricao=? WHERE id=? AND vendor_id=?"
+          ).bind(body.titulo||"", body.descricao||"", p[2], effectiveVendorId).run();
+          return json({ ok: true });
+        }
+        if (req.method === "DELETE" && p[2]) {
+          await env.DB.prepare("DELETE FROM estoque_tabelas WHERE id=? AND vendor_id=?").bind(p[2], effectiveVendorId).run();
+          await env.DB.prepare("DELETE FROM estoque_itens WHERE tabela_id=? AND vendor_id=?").bind(p[2], effectiveVendorId).run();
+          return json({ ok: true });
+        }
+      }
+
+      // Itens de uma tabela de estoque
+      if (p[1] === "estoque-itens") {
+        if (req.method === "GET") {
+          const url2 = new URL(req.url);
+          const tabelaId = url2.searchParams.get("tabela_id") || "";
+          const rows = await env.DB.prepare(
+            "SELECT * FROM estoque_itens WHERE vendor_id=? AND tabela_id=? ORDER BY ordem ASC, created_at ASC"
+          ).bind(effectiveVendorId, tabelaId).all<any>();
+          return json(rows.results || []);
+        }
+        if (req.method === "POST") {
+          const body = await readJson<any>(req);
+          const id = "EI-" + String(Date.now()).slice(-8) + Math.random().toString(36).slice(2,5).toUpperCase();
+          await env.DB.prepare(
+            `INSERT INTO estoque_itens (id,vendor_id,tabela_id,codigo,produto,quantidade,quantidade_min,unidade,obs,bloqueado,bloqueado_por,bloqueado_motivo,ordem,updated_at,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          ).bind(
+            id, effectiveVendorId, body.tabela_id||"",
+            body.codigo||"", body.produto||"",
+            Number(body.quantidade||0), Number(body.quantidade_min||0),
+            body.unidade||"UN", body.obs||"",
+            0, "", "", Number(body.ordem||0),
+            nowISO(), nowISO()
+          ).run();
+          return json({ id });
+        }
+        if (req.method === "PUT" && p[2]) {
+          const body = await readJson<any>(req);
+          const item = await env.DB.prepare("SELECT * FROM estoque_itens WHERE id=? AND vendor_id=?").bind(p[2], effectiveVendorId).first<any>();
+          if (!item) return bad("Item não encontrado.", 404);
+
+          const vendorRow = await env.DB.prepare("SELECT name FROM vendors WHERE id=?").bind(vendorId).first<any>();
+          const nomeUsuario = vendorRow?.name || vendorId;
+
+          // Se mudou bloqueio, registrar quem bloqueou
+          let bloqueado = item.bloqueado;
+          let bloqueadoPor = item.bloqueado_por || "";
+          let bloqueadoMotivo = item.bloqueado_motivo || "";
+
+          if (body.bloqueado !== undefined) {
+            bloqueado = body.bloqueado ? 1 : 0;
+            bloqueadoPor = body.bloqueado ? nomeUsuario : "";
+            bloqueadoMotivo = body.bloqueado ? (body.bloqueado_motivo||"") : "";
+          }
+
+          await env.DB.prepare(
+            `UPDATE estoque_itens SET
+              codigo=?,produto=?,quantidade=?,quantidade_min=?,unidade=?,obs=?,
+              bloqueado=?,bloqueado_por=?,bloqueado_motivo=?,ordem=?,updated_at=?
+             WHERE id=? AND vendor_id=?`
+          ).bind(
+            body.codigo||item.codigo, body.produto||item.produto,
+            Number(body.quantidade??item.quantidade), Number(body.quantidade_min??item.quantidade_min),
+            body.unidade||item.unidade, body.obs||item.obs,
+            bloqueado, bloqueadoPor, bloqueadoMotivo,
+            Number(body.ordem||item.ordem), nowISO(),
+            p[2], effectiveVendorId
+          ).run();
+
+          // Log de bloqueio
+          if (body.bloqueado !== undefined) {
+            const acao = body.bloqueado ? "bloqueou" : "desbloqueou";
+            await logAtividade("editar","estoque",`${nomeUsuario} ${acao} "${item.produto}" ${body.bloqueado_motivo?`— ${body.bloqueado_motivo}`:""}`);
+          }
+
+          return json({ ok: true });
+        }
+        if (req.method === "DELETE" && p[2]) {
+          await env.DB.prepare("DELETE FROM estoque_itens WHERE id=? AND vendor_id=?").bind(p[2], effectiveVendorId).run();
+          return json({ ok: true });
+        }
+      }
+
       return bad("Not found", 404);
     } catch (e: any) {
       return bad("Erro interno", 500, e?.message || String(e));
