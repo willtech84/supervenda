@@ -92,8 +92,8 @@
     {id:"relatorios",  label:"Relatórios",  icon:"📈"},
     {id:"manuais",     label:"Manuais",     icon:"📚"},
     {id:"vendas",      label:"Vendas",      icon:"💵"},
+    {id:"estoque",     label:"Estoque",     icon:"📦"},
     {id:"visitas",     label:"Visitas",     icon:"🏢"},
-    {id:"cartao",      label:"Cartões",     icon:"🪪"},
     {id:"rotas",       label:"Rotas",       icon:"🗺️", resource:"rotas"},
     {id:"despesas",    label:"Despesas",    icon:"💸", resource:"despesas"},
     {id:"lembretes",   label:"Lembretes",   icon:"🔔", resource:"lembretes"},
@@ -563,8 +563,8 @@
     }
     if(route.id==="manuais"){renderManuais(root);return;}
     if(route.id==="vendas"){renderVendas(root);return;}
+    if(route.id==="estoque"){renderEstoque(root);return;}
     if(route.id==="visitas"){renderVisitas(root);return;}
-    if(route.id==="cartao"){renderCartoes(root);return;}
     if(route.id==="rotas"){
       if(!temPermissaoLocal("rotas")){root.innerHTML=`<div class="card"><p style="color:var(--red);">🚫 Sem permissão para acessar Rotas.</p></div>`;return;}
       renderRotas(root);return;
@@ -2955,431 +2955,136 @@
     }
   }
 
-  // ─── Porta-Cartão de Visitas ──────────────────────────────────────────────────
-  async function renderCartoes(root){
-    // ── Estado em memória — carregado da API, não do localStorage ──────────────
-    let cartoes=[];
-
-    async function carregarCartoes(){
-      try{ cartoes=safeArray(await DB.request("/api/cartoes",{method:"GET"})); }
-      catch(e){ cartoes=[]; console.warn("cartoes:",e?.message); }
-    }
-
-    function atualizarContador(){
-      const el=document.getElementById("sv-cart-count"); if(!el) return;
-      const n=cartoes.length;
-      el.textContent=`${n} cartão${n!==1?"ões":""} cadastrado${n!==1?"s":""}`;
-    }
-
-    function renderLista(){
-      const lista=document.getElementById("sv-cart-lista"); if(!lista) return;
-      atualizarContador();
-      const q=(document.getElementById("sv-cart-busca")?.value||"").trim().toLowerCase();
-      const filtrados=q?cartoes.filter(c=>
-        String(c.nome||"").toLowerCase().includes(q)||
-        String(c.empresa||"").toLowerCase().includes(q)||
-        String(c.telefone||"").toLowerCase().includes(q)
-      ):cartoes;
-      if(!filtrados.length){
-        lista.innerHTML=`<div class="empty-state"><div class="empty-icon">🪪</div><div class="empty-text">${q?"Nenhum cartão encontrado.":"Nenhum cartão cadastrado ainda.\nToque em + Novo para escanear ou cadastrar."}</div></div>`;
-        return;
-      }
-      lista.innerHTML=filtrados.map(c=>`
-        <div class="list-item">
-          <div style="display:flex;gap:12px;align-items:flex-start;">
-            ${c.foto?`<img src="${c.foto}" style="width:72px;height:48px;object-fit:cover;border-radius:8px;flex-shrink:0;border:1px solid var(--border);"/>`:
-              `<div style="width:72px;height:48px;border-radius:8px;background:var(--bg3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0;">🪪</div>`}
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(c.nome||"")}</div>
-              ${c.cargo?`<div style="font-size:12px;color:var(--muted);">${esc(c.cargo)}</div>`:""}
-              ${c.empresa?`<div style="font-size:13px;font-weight:500;margin-top:2px;">🏢 ${esc(c.empresa)}</div>`:""}
-              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;">
-                ${c.telefone?`<span style="font-size:12px;color:var(--muted);">📞 ${esc(c.telefone)}</span>`:""}
-                ${c.email?`<span style="font-size:12px;color:var(--muted);">✉️ ${esc(c.email)}</span>`:""}
-              </div>
-            </div>
-          </div>
-          <div class="list-item-actions" style="margin-top:10px;">
-            ${(()=>{const tel=String(c.telefone||"").replace(/\D/g,"");const wpp=encodeURIComponent("Olá, Willyam da Cefeq.");return tel.length>=10?`<a href="https://wa.me/55${tel}?text=${wpp}" target="_blank" class="btn btn-secondary" style="font-size:12px;padding:6px 12px;background:rgba(37,211,102,.1);border-color:rgba(37,211,102,.3);color:#25d366;text-decoration:none;">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="#25d366" style="vertical-align:middle;margin-right:3px;"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>WhatsApp</a>`:"";})()}
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-cart-cli="${c.id||c._id}">👤 → Cliente</button>
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-cart-edit="${c.id||c._id}">✏️</button>
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-cart-del="${c.id||c._id}">🗑️</button>
-          </div>
-        </div>`).join("");
-
-      // Exportar para cliente
-      lista.querySelectorAll("[data-cart-cli]").forEach(btn=>{
-        btn.addEventListener("click",()=>{
-          const id=btn.getAttribute("data-cart-cli");
-          const c=cartoes.find(x=>(x.id||x._id)===id);
-          if(!c) return;
-          if(!confirm(`Exportar "${c.nome}" para o cadastro de Clientes?`)) return;
-          navigate("clientes");
-          setTimeout(()=>{
-            renderForm("clientes",null);
-            setTimeout(()=>{
-              const set=(name,val,upper=true)=>{
-                if(!val) return;
-                const el=document.querySelector("#sv-form-wrap [name='"+name+"']");
-                if(!el) return;
-                el.value=upper?String(val).toUpperCase():String(val);
-              };
-              set("nome",    c.empresa||c.nome);
-              const d=String(c.telefone||"").replace(/\D/g,"").slice(0,11);
-              if(d){
-                let tel=d;
-                if(d.length===11) tel=d.replace(/^(\d{2})(\d{5})(\d{4})$/,"($1) $2-$3");
-                else if(d.length===10) tel=d.replace(/^(\d{2})(\d{4})(\d{4})$/,"($1) $2-$3");
-                const el=document.querySelector("#sv-form-wrap [name='telefone']");
-                if(el) el.value=tel;
-              }
-              set("email",   c.email, false);
-              set("endereco",c.endereco);
-              const obsVal=[c.nome,c.cargo].filter(Boolean).join(" — ");
-              set("obs", obsVal);
-              document.querySelector("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"});
-            },350);
-          },120);
-        });
-      });
-
-      // Editar
-      lista.querySelectorAll("[data-cart-edit]").forEach(btn=>{
-        btn.addEventListener("click",()=>{
-          const id=btn.getAttribute("data-cart-edit");
-          const c=cartoes.find(x=>(x.id||x._id)===id);
-          if(!c) return;
-          renderFormCartao(c);
-        });
-      });
-
-      // Excluir
-      lista.querySelectorAll("[data-cart-del]").forEach(btn=>{
-        btn.addEventListener("click",async()=>{
-          const id=btn.getAttribute("data-cart-del");
-          const c=cartoes.find(x=>(x.id||x._id)===id);
-          if(!confirm(`Excluir o cartão "${c?.nome||""}"?`)) return;
-          await runWithUi(async()=>{
-            await DB.request(`/api/cartoes/${encodeURIComponent(id)}`,{method:"DELETE"});
-            cartoes=cartoes.filter(x=>(x.id||x._id)!==id);
-            renderLista();
-            toast("Cartão excluído.","info");
-          },"Excluindo...");
-        });
-      });
-    }
-
-    function renderFormCartao(item=null){
-      const fw=document.getElementById("sv-cart-form"); if(!fw) return;
-      const isEdit=!!item;
-      const inStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;text-transform:uppercase;`;
-      fw.innerHTML=`
-        <div class="form-card">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-            <div style="font-size:15px;font-weight:600;">${isEdit?"✏️ Editar":"📷 Novo"} cartão</div>
-            <button type="button" id="cart-fechar" class="btn btn-ghost btn-icon">✕</button>
-          </div>
-          <div style="margin-bottom:14px;">
-            <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;">FOTO DO CARTÃO</div>
-            <div style="display:flex;gap:10px;margin-bottom:10px;">
-              <button type="button" id="cart-btn-camera" style="flex:1;padding:12px;background:var(--bg2);border:2px dashed rgba(0,230,118,.4);border-radius:10px;cursor:pointer;font-family:var(--font);font-size:13px;color:var(--green);">📷 Câmera</button>
-              <button type="button" id="cart-btn-galeria" style="flex:1;padding:12px;background:var(--bg2);border:2px dashed var(--border-hi);border-radius:10px;cursor:pointer;font-family:var(--font);font-size:13px;">🖼️ Galeria</button>
-            </div>
-            <input type="file" id="cart-input-camera" accept="image/*" capture="environment" style="display:none;"/>
-            <input type="file" id="cart-input-galeria" accept="image/*" style="display:none;"/>
-            <div id="cart-preview-wrap" style="${item?.foto?"":"display:none;"}margin-bottom:10px;text-align:center;">
-              <img id="cart-img-preview" src="${item?.foto||""}" style="max-width:100%;max-height:150px;border-radius:10px;object-fit:contain;border:1px solid var(--border);"/>
-              <button type="button" id="cart-ocr-btn" class="btn btn-secondary" style="margin-top:8px;font-size:12px;width:100%;">🤖 Ler dados do cartão automaticamente</button>
-              <div id="cart-ocr-status" style="display:none;font-size:12px;color:var(--muted);margin-top:6px;text-align:center;"></div>
-            </div>
-          </div>
-          <div class="form-grid">
-            <div class="field"><label>Nome *</label><input id="cart-nome" type="text" value="${esc(item?.nome||"")}" placeholder="NOME COMPLETO" style="${inStyle}"/></div>
-            <div class="field"><label>Cargo / Função</label><input id="cart-cargo" type="text" value="${esc(item?.cargo||"")}" placeholder="VENDEDOR, GERENTE..." style="${inStyle}"/></div>
-            <div class="field"><label>Empresa</label><input id="cart-empresa" type="text" value="${esc(item?.empresa||"")}" placeholder="NOME DA EMPRESA" style="${inStyle}"/></div>
-            <div class="field"><label>Telefone</label><input id="cart-tel" type="tel" inputmode="tel" value="${esc(item?.telefone||"")}" placeholder="(00) 00000-0000" style="${inStyle}text-transform:none;"/></div>
-            <div class="field"><label>E-mail</label><input id="cart-email" type="email" inputmode="email" value="${esc(item?.email||"")}" placeholder="email@empresa.com" style="${inStyle}text-transform:none;"/></div>
-            <div class="field"><label>Endereço</label><input id="cart-end" type="text" value="${esc(item?.endereco||"")}" placeholder="RUA, NÚMERO, CIDADE" style="${inStyle}"/></div>
-            <div class="field"><label>Observações</label><textarea id="cart-obs" rows="2" style="${inStyle}resize:vertical;">${esc(item?.obs||"")}</textarea></div>
-          </div>
-          <div class="form-actions">
-            <button type="button" id="cart-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Cadastrar"}</button>
-            <button type="button" id="cart-cancelar" class="btn btn-ghost">Cancelar</button>
-          </div>
-        </div>`;
-
-      setTimeout(()=>fw.scrollIntoView({behavior:"smooth",block:"start"}),60);
-      setTimeout(()=>bindVozNoCampo(fw),120);
-
-      document.getElementById("cart-fechar")?.addEventListener("click",()=>{fw.innerHTML="";});
-      document.getElementById("cart-cancelar")?.addEventListener("click",()=>{fw.innerHTML="";});
-
-      let fotoDataUrl=item?.foto||"";
-      const mostrarPreview=(src)=>{
-        fotoDataUrl=src;
-        const pw=document.getElementById("cart-preview-wrap");
-        const pi=document.getElementById("cart-img-preview");
-        if(pw) pw.style.display="block";
-        if(pi) pi.src=src;
-      };
-      const processarFotoCartao=(file)=>{
-        if(!file) return;
-        const r=new FileReader();
-        r.onload=ev=>mostrarPreview(String(ev.target.result||""));
-        r.readAsDataURL(file);
-      };
-      document.getElementById("cart-btn-camera")?.addEventListener("click",()=>{
-        window._svFilePickerAt=Date.now(); // bloquear re-render enquanto câmera aberta
-        document.getElementById("cart-input-camera")?.click();
-      });
-      document.getElementById("cart-btn-galeria")?.addEventListener("click",()=>{
-        window._svFilePickerAt=Date.now();
-        document.getElementById("cart-input-galeria")?.click();
-      });
-      document.getElementById("cart-input-camera")?.addEventListener("change",e=>{processarFotoCartao(e.target.files?.[0]);e.target.value="";});
-      document.getElementById("cart-input-galeria")?.addEventListener("change",e=>{processarFotoCartao(e.target.files?.[0]);e.target.value="";});
-
-      // OCR Tesseract
-      document.getElementById("cart-ocr-btn")?.addEventListener("click",async(e)=>{
-        e.preventDefault();
-        e.stopPropagation();
-        if(!fotoDataUrl){toast("Adicione uma foto do cartão primeiro.","warning");return;}
-
-        // Guardar referências antes do await (o DOM pode mudar durante o async)
-        const formWrap=document.getElementById("sv-cart-form");
-        const btn=document.getElementById("cart-ocr-btn");
-        const statusEl=document.getElementById("cart-ocr-status");
-
-        if(!btn||!formWrap) return;
-        btn.disabled=true; btn.textContent="⏳ Lendo...";
-        if(statusEl){statusEl.style.display="block";statusEl.textContent="📖 Preparando imagem...";}
-
-        try{
-          const base64=fotoDataUrl.split(",")[1];
-          if(!base64) throw new Error("Foto inválida. Tire a foto novamente.");
-
-          const bytes=atob(base64);
-          const arr=new Uint8Array(bytes.length);
-          for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
-          const blob=new Blob([arr],{type:"image/jpeg"});
-
-          const txt=await rodarOCR(blob,pct=>{
-            // Verificar se o elemento ainda está no DOM antes de atualizar
-            const s=document.getElementById("cart-ocr-status");
-            if(s) s.textContent=`🔍 Lendo cartão... ${pct}%`;
-          });
-
-          // Verificar se o form ainda está no DOM após o processamento async
-          if(!document.getElementById("sv-cart-form")) return; // form foi fechado durante OCR
-
-          if(!txt||txt.trim().length<5) throw new Error("Não consegui ler texto no cartão. Tente foto mais nítida.");
-
-          const linhas=txt.split("\n").map(l=>l.trim()).filter(l=>l.length>2);
-          const reEmail=/[\w.+-]+@[\w-]+\.[a-z]{2,}/i;
-          const reTel=/(?:\+55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\s?)?\d{4}[-.\s]?\d{4}/;
-          let nome="",cargo="",empresa="",telefone="",email="",endereco="";
-          for(const linha of linhas){
-            const em=linha.match(reEmail); if(em&&!email){email=em[0];continue;}
-            const te=linha.match(reTel); if(te&&!telefone){telefone=te[0];continue;}
-            if(!cargo&&/\b(gerente|diretor|vendedor|representante|coord|analista|engenheir|técnico|socio|sócio|proprietári|ceo|cfo|cto|supervisor|consultor)\b/i.test(linha)){cargo=linha;continue;}
-            if(!nome&&/^[A-ZÀ-Ú][a-zà-ú]/.test(linha)&&!/\d/.test(linha)&&linha.split(" ").length>=2){nome=linha;continue;}
-            if(!empresa&&(/LTDA|EIRELI|S\.A\.|EPP|ME\b/i.test(linha)||linha===linha.toUpperCase()&&linha.length>4)){empresa=linha;continue;}
-            if(!endereco&&/\b(rua|av|avenida|estrada|rod|rodovia|r\.|al\.|alameda)\b/i.test(linha)){endereco=linha;continue;}
-          }
-
-          // Preencher campos usando getElementById — mais robusto que querySelector após async
-          const set=(id,val)=>{const el=document.getElementById(id);if(el&&val) el.value=String(val);};
-          set("cart-nome",    nome?.toUpperCase());
-          set("cart-cargo",   cargo?.toUpperCase());
-          set("cart-empresa", empresa?.toUpperCase());
-          set("cart-tel",     telefone);
-          set("cart-email",   email?.toLowerCase());
-          set("cart-end",     endereco?.toUpperCase());
-
-          const s2=document.getElementById("cart-ocr-status");
-          if(s2) s2.style.display="none";
-          toast("✅ Dados extraídos! Revise antes de salvar.","success",4000);
-
-        }catch(err){
-          const msg=String(err?.message||"Erro ao ler cartão");
-          const s3=document.getElementById("cart-ocr-status");
-          if(s3){s3.style.display="block"; s3.textContent="❌ "+msg;}
-          toast(msg,"error",5000);
-        }
-
-        const b2=document.getElementById("cart-ocr-btn");
-        if(b2){b2.disabled=false; b2.textContent="🤖 Ler dados do cartão automaticamente";}
-      });
-
-      // Máscara telefone
-      document.getElementById("cart-tel")?.addEventListener("input",e=>{
-        let v=e.target.value.replace(/\D/g,"").slice(0,11);
-        if(v.length<=10) v=v.replace(/^(\d{2})(\d{4})(\d{0,4})$/,"($1) $2-$3");
-        else v=v.replace(/^(\d{2})(\d{5})(\d{0,4})$/,"($1) $2-$3");
-        e.target.value=v.replace(/-$/,"");
-      });
-
-      // Salvar via API
-      document.getElementById("cart-salvar")?.addEventListener("click",async()=>{
-        const nome=document.getElementById("cart-nome")?.value?.trim()?.toUpperCase();
-        if(!nome){toast("Nome é obrigatório.","warning");return;}
-        const payload={
-          id: item?.id||item?._id||("CN-"+Date.now()),
-          nome,
-          cargo:  document.getElementById("cart-cargo")?.value?.trim()?.toUpperCase()||"",
-          empresa:document.getElementById("cart-empresa")?.value?.trim()?.toUpperCase()||"",
-          telefone:document.getElementById("cart-tel")?.value?.trim()||"",
-          email:  document.getElementById("cart-email")?.value?.trim()?.toLowerCase()||"",
-          endereco:document.getElementById("cart-end")?.value?.trim()?.toUpperCase()||"",
-          obs:    document.getElementById("cart-obs")?.value?.trim()?.toUpperCase()||"",
-          foto:   fotoDataUrl||"",
-        };
-        await runWithUi(async()=>{
-          if(isEdit){
-            await DB.request(`/api/cartoes/${encodeURIComponent(payload.id)}`,{
-              method:"PUT", body:JSON.stringify(payload)
-            });
-            cartoes=cartoes.map(x=>(x.id||x._id)===payload.id?{...x,...payload}:x);
-          } else {
-            const novo=await DB.request("/api/cartoes",{
-              method:"POST", body:JSON.stringify(payload)
-            });
-            cartoes=[{...payload,...(novo||{})}, ...cartoes];
-          }
-          const fw2=document.getElementById("sv-cart-form");
-          if(fw2) fw2.innerHTML="";
-          renderLista();
-          toast(`✅ Cartão ${isEdit?"atualizado":"cadastrado"}.`,"success");
-        },isEdit?"Salvando...":"Cadastrando...");
-      });
-    }
-
-    // Render principal
-    root.innerHTML=`
-      <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-          <div class="card-title">🪪 Porta-Cartões</div>
-          <div style="display:flex;gap:6px;">
-            <button id="cart-novo-btn" class="btn btn-primary" style="width:auto;">+ Novo cartão</button>
-            <button id="cart-refresh-btn" class="btn btn-secondary btn-icon" title="Atualizar">↻</button>
-          </div>
-        </div>
-        <div class="search-wrap" style="margin-top:10px;">
-          <span class="search-icon">🔍</span>
-          <input id="sv-cart-busca" type="search" placeholder="Buscar por nome, empresa..." autocomplete="off"/>
-        </div>
-        <div id="sv-cart-count" style="margin-top:6px;font-size:12px;color:var(--muted);">Carregando...</div>
-      </div>
-      <div id="sv-cart-form"></div>
-      <div id="sv-cart-lista"><div class="empty-state"><div class="empty-icon">🪪</div><div class="empty-text">Carregando cartões...</div></div></div>`;
-
-    // Carregar da API
-    await runWithUi(async()=>{
-      await carregarCartoes();
-      renderLista();
-    },"Carregando cartões...");
-
-    document.getElementById("cart-novo-btn")?.addEventListener("click",()=>renderFormCartao(null));
-    document.getElementById("cart-refresh-btn")?.addEventListener("click",async()=>{
-      await runWithUi(async()=>{ await carregarCartoes(); renderLista(); toast("Atualizado.","success"); },"Atualizando...");
-    });
-    document.getElementById("sv-cart-busca")?.addEventListener("input",renderLista);
-  }
-
-
   // ─── Aba Visitas ─────────────────────────────────────────────────────────────
   async function renderVisitas(root){
-    // ── Dados carregados da API — visíveis para todos os usuários ──────────────
     let visitas=[];
     async function carregarVisitas(){
       try{ visitas=safeArray(await DB.request("/api/visitas",{method:"GET"})); }
       catch(e){ visitas=[]; console.warn("visitas:",e?.message); }
     }
-
+    if(!state._visFiltro) state._visFiltro="tudo";
     const inStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;`;
 
-    if(!state._visFiltro) state._visFiltro="tudo";
+    // ── Sub-abas ─────────────────────────────────────────────────────────────
+    if(!state._visTab) state._visTab="lista";
+
+    // ── Filtro de período (suporta intervalo de datas) ────────────────────────
+    if(!state._visDataInicio) state._visDataInicio="";
+    if(!state._visDataFim)    state._visDataFim="";
+
+    function getFiltradasPorPeriodo(){
+      let items=[...visitas];
+      const f=state._visFiltro;
+      const hoje=new Date().toISOString().slice(0,10);
+      const mesAtual=new Date().toISOString().slice(0,7);
+      const semanaAtras=new Date(Date.now()-7*24*60*60*1000).toISOString().slice(0,10);
+      if(f==="intervalo"&&(state._visDataInicio||state._visDataFim)){
+        items=items.filter(v=>{
+          const d=String(v.data||"").slice(0,10);
+          if(!d) return false;
+          if(state._visDataInicio&&d<state._visDataInicio) return false;
+          if(state._visDataFim&&d>state._visDataFim) return false;
+          return true;
+        });
+      } else if(f==="hoje") items=items.filter(v=>String(v.data||"").slice(0,10)===hoje);
+      else if(f==="semana") items=items.filter(v=>{const d=String(v.data||"").slice(0,10);return d>=semanaAtras&&d<=hoje;});
+      else if(f==="mes") items=items.filter(v=>String(v.data||"").slice(0,10).startsWith(mesAtual));
+      return items;
+    }
+
+    function renderFiltros(){
+      const f=state._visFiltro;
+      const btnCls=(id)=>`btn btn-periodo ${f===id?"btn-primary":"btn-secondary"}`;
+      return`<div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;">
+        <div style="display:flex;gap:5px;flex-wrap:wrap;">
+          <button class="${btnCls("hoje")}" data-vf="hoje" style="font-size:11px;padding:7px 10px;">📅 Hoje</button>
+          <button class="${btnCls("semana")}" data-vf="semana" style="font-size:11px;padding:7px 10px;">📆 Semana</button>
+          <button class="${btnCls("mes")}" data-vf="mes" style="font-size:11px;padding:7px 10px;">🗓️ Mês</button>
+          <button class="${btnCls("intervalo")}" data-vf="intervalo" style="font-size:11px;padding:7px 10px;">📏 Intervalo</button>
+          <button class="${btnCls("tudo")}" data-vf="tudo" style="font-size:11px;padding:7px 10px;">📋 Todos</button>
+        </div>
+        <div id="sv-vis-intervalo" style="display:${f==="intervalo"?"flex":"none"};gap:8px;align-items:center;flex-wrap:wrap;">
+          <div style="display:flex;gap:6px;align-items:center;flex:1;">
+            <span style="font-size:12px;color:var(--muted);">De</span>
+            <input type="date" id="vis-data-ini" value="${esc(state._visDataInicio)}" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;"/>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;flex:1;">
+            <span style="font-size:12px;color:var(--muted);">Até</span>
+            <input type="date" id="vis-data-fim" value="${esc(state._visDataFim)}" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;"/>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    // ── Render lista ──────────────────────────────────────────────────────────
     function renderLista(){
       const lista=document.getElementById("sv-vis-lista"); if(!lista) return;
       const q=String(document.getElementById("sv-vis-busca")?.value||"").toLowerCase();
-      // Usar filtrarPorPeriodoGen que trata Hoje/Semana/Mês/data_especifica
-      let filtradas=filtrarPorPeriodoGen(visitas,"data","_visFiltro");
+      let filtradas=getFiltradasPorPeriodo();
       if(q) filtradas=filtradas.filter(v=>
-        String(v.nome||"").toLowerCase().includes(q)||
-        String(v.telefone||"").toLowerCase().includes(q)||
-        String(v.obs||"").toLowerCase().includes(q)
+        String(v.nome||"").toLowerCase().includes(q)||String(v.telefone||"").toLowerCase().includes(q)||
+        String(v.cidade||"").toLowerCase().includes(q)||String(v.obs||"").toLowerCase().includes(q)
       );
+      const cnt=document.getElementById("sv-vis-count");
+      if(cnt) cnt.textContent=`${filtradas.length} visita${filtradas.length!==1?"s":""}`;
       if(!filtradas.length){
-        lista.innerHTML=`<div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">${q?"Nenhuma visita encontrada.":"Nenhuma visita registrada ainda."}</div></div>`;
+        lista.innerHTML=`<div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">${q?"Nenhuma visita encontrada.":"Nenhuma visita no período."}</div></div>`;
         return;
       }
-      lista.innerHTML=filtradas.map((v,i)=>{
+      lista.innerHTML=filtradas.map(v=>{
         const tel=String(v.telefone||"").replace(/\D/g,"");
-        const wppMsg=encodeURIComponent("Olá, Willyam da Cefeq.");
-        const wppHref=tel.length>=10?`https://wa.me/55${tel}?text=${wppMsg}`:"";
+        const wpp=encodeURIComponent("Olá, Willyam da Cefeq.");
+        const wppHref=tel.length>=10?`https://wa.me/55${tel}?text=${wpp}`:"";
         return`<div class="list-item">
           <div class="list-item-top">
             <div><div class="list-item-title">${esc(v.nome||"")}</div>
-              ${v.endereco?`<div style="font-size:12px;color:var(--muted);margin-top:2px;">📍 ${esc(v.endereco)}</div>`:""}
+              ${v.cidade?`<div style="font-size:12px;color:var(--muted);">📍 ${esc(v.cidade)}</div>`:""}
             </div>
-            <div style="font-size:11px;color:var(--muted);text-align:right;">${v.data?dateFormatBR(v.data):""}</div>
+            <div style="text-align:right;font-size:11px;color:var(--muted);">${v.data?dateFormatBR(v.data):""}</div>
           </div>
-          ${v.telefone?`<div class="list-item-meta"><span class="meta-item">📞 ${esc(v.telefone)}</span></div>`:""}
-          ${v.obs?`<div style="font-size:12px;color:var(--muted);margin-top:4px;padding:0 2px;">${esc(v.obs)}</div>`:""}
+          ${v.resultado?`<div style="margin-top:4px;"><span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;background:rgba(68,136,255,.12);color:var(--blue);">${esc(v.resultado)}</span></div>`:""}
+          ${v.obs?`<div style="font-size:12px;color:var(--muted);margin-top:4px;">${esc(v.obs)}</div>`:""}
           <div class="list-item-actions">
             ${wppHref?`<a href="${wppHref}" target="_blank" class="btn btn-secondary" style="font-size:12px;padding:6px 12px;background:rgba(37,211,102,.1);border-color:rgba(37,211,102,.3);color:#25d366;text-decoration:none;">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="#25d366" style="vertical-align:middle;margin-right:3px;"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>WhatsApp</a>`:""}
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-vis-cli="${v.id||v._id}">👤 → Cliente</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-vis-cli="${v.id||v._id}">👤→ Cliente</button>
             <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-vis-edit="${v.id||v._id}">✏️</button>
             <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-vis-del="${v.id||v._id}">🗑️</button>
           </div>
         </div>`;
       }).join("");
-
-      // Exportar para cliente
+      // Bindings
       lista.querySelectorAll("[data-vis-cli]").forEach(btn=>{
         btn.addEventListener("click",()=>{
-          const id=btn.getAttribute("data-vis-cli");
-          const v=visitas.find(x=>(x.id||x._id)===id); if(!v) return;
-          if(!confirm(`Exportar "${v.nome}" para o cadastro de Clientes?`)) return;
+          const v=visitas.find(x=>(x.id||x._id)===btn.getAttribute("data-vis-cli")); if(!v) return;
           navigate("clientes");
-          setTimeout(()=>{
-            const fake={nome:v.nome,telefone:v.telefone||"",endereco:v.endereco||"",cidade:v.cidade||"",obs:v.obs||""};
-            renderForm("clientes",null);
-            setTimeout(()=>{
-              Object.entries(fake).forEach(([k,val])=>{
-                const el=$("#sv-form-wrap [name='"+k+"']");
-                if(el) el.value=String(val||"").toUpperCase();
-              });
-              $("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"});
-            },100);
-          },80);
+          setTimeout(()=>{renderForm("clientes",null);setTimeout(()=>{
+            const set=(n,val,u=true)=>{const el=document.querySelector("#sv-form-wrap [name='"+n+"']");if(el&&val)el.value=u?String(val).toUpperCase():String(val);};
+            set("nome",v.nome); set("telefone",v.telefone,false);
+            const d=String(v.telefone||"").replace(/\D/g,"").slice(0,11);
+            if(d){const t=d.length===11?d.replace(/^(\d{2})(\d{5})(\d{4})$/,"($1) $2-$3"):d.replace(/^(\d{2})(\d{4})(\d{4})$/,"($1) $2-$3");const el=document.querySelector("#sv-form-wrap [name='telefone']");if(el)el.value=t;}
+            set("endereco",v.endereco); set("obs",[v.resultado,v.acao].filter(Boolean).join(" → "));
+            document.querySelector("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"});
+          },350);},120);
         });
       });
-      // Editar
       lista.querySelectorAll("[data-vis-edit]").forEach(btn=>{
-        btn.addEventListener("click",()=>{
-          const id=btn.getAttribute("data-vis-edit");
-          const v=visitas.find(x=>(x.id||x._id)===id); if(!v) return;
-          renderFormVisita(v);
-        });
+        btn.addEventListener("click",()=>{const v=visitas.find(x=>(x.id||x._id)===btn.getAttribute("data-vis-edit"));if(v)renderFormVisita(v);});
       });
-      // Excluir
       lista.querySelectorAll("[data-vis-del]").forEach(btn=>{
         btn.addEventListener("click",async()=>{
           const id=btn.getAttribute("data-vis-del");
           if(!confirm("Excluir esta visita?")) return;
           await runWithUi(async()=>{
             await DB.request(`/api/visitas/${encodeURIComponent(id)}`,{method:"DELETE"});
-            visitas=visitas.filter(x=>(x.id||x._id)!==id);
-            renderLista();
+            visitas=visitas.filter(x=>(x.id||x._id)!==id); renderLista();
             toast("Visita excluída.","info");
           },"Excluindo...");
         });
       });
     }
 
+    // ── Formulário de visita ──────────────────────────────────────────────────
     function renderFormVisita(item=null){
       const fw=document.getElementById("sv-vis-form"); if(!fw) return;
       const isEdit=!!item;
@@ -3395,14 +3100,14 @@
             <div class="field"><label>Empresa / Nome *</label><input id="vis-nome" type="text" value="${esc(item?.nome||"")}" style="${inStyle}text-transform:uppercase;" placeholder="NOME DA EMPRESA"/></div>
             <div class="field"><label>Telefone</label><input id="vis-tel" type="tel" value="${esc(item?.telefone||"")}" style="${inStyle}" placeholder="(00) 00000-0000"/></div>
             <div class="field">
-              <label style="display:flex;align-items:center;justify-content:space-between;">
-                Endereço
+              <label style="display:flex;align-items:center;justify-content:space-between;">Endereço
                 <button type="button" id="vis-geo" style="font-size:11px;padding:3px 8px;background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.3);border-radius:6px;color:var(--green);cursor:pointer;font-family:var(--font);">📍 Localização</button>
               </label>
               <input id="vis-end" type="text" value="${esc(item?.endereco||"")}" style="${inStyle}text-transform:uppercase;" placeholder="RUA, NÚMERO, BAIRRO"/>
             </div>
             <div class="field"><label>Cidade</label><input id="vis-cid" type="text" value="${esc(item?.cidade||"")}" style="${inStyle}text-transform:uppercase;"/></div>
             <div class="field"><label>Data da visita</label><input id="vis-data" type="date" value="${esc(item?.data||new Date().toISOString().slice(0,10))}" style="${inStyle}"/></div>
+            <div class="field"><label>Latitude (auto)</label><input id="vis-lat" type="text" value="${esc(item?.lat||"")}" placeholder="Ex: -26.3044" style="${inStyle}text-transform:none;" readonly/></div>
             <div class="field">
               <label>Resultado</label>
               <select id="vis-resultado" style="${inStyle}">
@@ -3420,46 +3125,43 @@
             <div class="field"><label>Observações</label><textarea id="vis-obs" rows="3" style="${inStyle}resize:vertical;text-transform:uppercase;">${esc(item?.obs||"")}</textarea></div>
           </div>
           <div class="form-actions">
-            <button type="button" id="vis-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Registrar visita"}</button>
+            <button type="button" id="vis-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Registrar"}</button>
             <button type="button" id="vis-cancel" class="btn btn-ghost">Cancelar</button>
           </div>
         </div>`;
-
+      setTimeout(()=>fw.scrollIntoView({behavior:"smooth",block:"start"}),60);
+      setTimeout(()=>bindVozNoCampo(fw),120);
       document.getElementById("vis-close")?.addEventListener("click",()=>{fw.innerHTML="";});
       document.getElementById("vis-cancel")?.addEventListener("click",()=>{fw.innerHTML="";});
-
+      // Geolocalização
       document.getElementById("vis-geo")?.addEventListener("click",async()=>{
-        const btn=document.getElementById("vis-geo");
-        if(!navigator.geolocation){toast("Geolocalização indisponível.","warning");return;}
-        btn.textContent="⏳..."; btn.disabled=true;
+        const btn=document.getElementById("vis-geo"); if(!navigator.geolocation){toast("Indisponível.","warning");return;}
+        btn.textContent="⏳"; btn.disabled=true;
         navigator.geolocation.getCurrentPosition(async pos=>{
           const{latitude:lat,longitude:lng}=pos.coords;
+          document.getElementById("vis-lat").value=`${lat.toFixed(5)},${lng.toFixed(5)}`;
           try{
             const r=await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,{headers:{"User-Agent":"supervenda-app"}});
             const d=await r.json(); const a=d.address||{};
-            const rua=a.road||a.pedestrian||""; const num=a.house_number||"";
+            const rua=a.road||""; const num=a.house_number||"";
             document.getElementById("vis-end").value=(rua+(num?" "+num:"")).toUpperCase();
             document.getElementById("vis-cid").value=(a.city||a.town||a.village||"").toUpperCase();
-            toast("📍 Localização preenchida.","success");
-          }catch{
-            document.getElementById("vis-end").value=`LAT ${lat.toFixed(5)}, LNG ${lng.toFixed(5)}`;
-          }
+          }catch{document.getElementById("vis-end").value=`${lat.toFixed(4)},${lng.toFixed(4)}`;}
           btn.textContent="📍 Localização"; btn.disabled=false;
-        },err=>{toast(err.message,"error");btn.textContent="📍 Localização";btn.disabled=false;},{enableHighAccuracy:true,timeout:8000});
+        },err=>{toast(err.message,"error");btn.textContent="📍 Localização";btn.disabled=false;},{enableHighAccuracy:true,timeout:10000});
       });
-
       document.getElementById("vis-tel")?.addEventListener("input",e=>{
         let v=e.target.value.replace(/\D/g,"").slice(0,11);
         if(v.length<=10) v=v.replace(/^(\d{2})(\d{4})(\d{0,4})$/,"($1) $2-$3");
         else v=v.replace(/^(\d{2})(\d{5})(\d{0,4})$/,"($1) $2-$3");
         e.target.value=v.replace(/-$/,"");
       });
-
       document.getElementById("vis-salvar")?.addEventListener("click",async()=>{
         const nome=document.getElementById("vis-nome")?.value?.trim()?.toUpperCase();
-        if(!nome){toast("Informe o nome da empresa.","warning");return;}
+        if(!nome){toast("Informe o nome.","warning");return;}
+        const latVal=document.getElementById("vis-lat")?.value||"";
         const payload={
-          id: item?.id||item?._id||("VS-"+Date.now()),
+          id:item?.id||item?._id||("VS-"+Date.now()),
           nome, telefone:document.getElementById("vis-tel")?.value||"",
           endereco:document.getElementById("vis-end")?.value?.toUpperCase()||"",
           cidade:document.getElementById("vis-cid")?.value?.toUpperCase()||"",
@@ -3467,6 +3169,7 @@
           resultado:document.getElementById("vis-resultado")?.value||"",
           acao:document.getElementById("vis-acao")?.value||"",
           obs:document.getElementById("vis-obs")?.value?.toUpperCase()||"",
+          lat:latVal,
         };
         await runWithUi(async()=>{
           if(isEdit){
@@ -3480,118 +3183,249 @@
           toast(`✅ Visita ${isEdit?"atualizada":"registrada"}.`,"success");
         },isEdit?"Salvando...":"Registrando...");
       });
-      setTimeout(()=>fw.scrollIntoView({behavior:"smooth",block:"start"}),60);
-      setTimeout(()=>bindVozNoCampo(fw),120);
     }
 
-    // Exportar CSV
-    function exportarVisitas(){
-      if(!visitas.length){toast("Nenhuma visita para exportar.","warning");return;}
-      const cols=["data","nome","telefone","endereco","cidade","resultado","acao","obs"];
-      const hdrs=["Data","Empresa","Telefone","Endereço","Cidade","Resultado","Próxima Ação","Observações"];
-      const csv="\uFEFF"+[hdrs.join(";"),...visitas.map(v=>cols.map(c=>{const x=c==="data"?dateFormatBR(v[c]):v[c]||"";return x.includes(";")?`"${x}"`:x;}).join(";"))].join("\n");
-      const a=Object.assign(document.createElement("a"),{href:URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"})),download:`visitas_${new Date().toISOString().slice(0,10)}.csv`});
-      a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
-      toast(`${visitas.length} visitas exportadas.`,"success");
+    // ── Relatório avançado ────────────────────────────────────────────────────
+    function abrirRelatorio(){
+      const filtradas=getFiltradasPorPeriodo();
+      if(!filtradas.length){toast("Nenhuma visita no período.","warning");return;}
+      const CAMPOS=[
+        {key:"data",      label:"Data",         def:true},
+        {key:"nome",      label:"Empresa",       def:true},
+        {key:"telefone",  label:"Telefone",      def:true},
+        {key:"cidade",    label:"Cidade",        def:true},
+        {key:"endereco",  label:"Endereço",      def:false},
+        {key:"resultado", label:"Resultado",     def:true},
+        {key:"acao",      label:"Próxima Ação",  def:true},
+        {key:"obs",       label:"Observações",   def:false},
+      ];
+      const mo=document.createElement("div");
+      mo.style.cssText="position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:20px;";
+      mo.innerHTML=`
+        <div style="background:var(--bg);border-radius:16px;padding:20px;width:100%;max-width:400px;max-height:90vh;overflow-y:auto;">
+          <div style="font-size:15px;font-weight:700;margin-bottom:16px;">📋 Configurar relatório</div>
+          <div style="font-size:13px;color:var(--muted);margin-bottom:12px;">Selecione os campos que deseja incluir:</div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
+            ${CAMPOS.map(c=>`
+              <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg2);border-radius:8px;cursor:pointer;">
+                <input type="checkbox" data-campo="${c.key}" ${c.def?"checked":""} style="width:16px;height:16px;accent-color:var(--green);cursor:pointer;"/>
+                <span style="font-size:13px;">${c.label}</span>
+              </label>`).join("")}
+          </div>
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Formato:</div>
+          <div style="display:flex;gap:8px;margin-bottom:16px;">
+            <button id="rel-html" class="btn btn-primary" style="flex:1;">📄 HTML/PDF</button>
+            <button id="rel-csv" class="btn btn-secondary" style="flex:1;">📊 CSV</button>
+          </div>
+          <button id="rel-cancel" class="btn btn-ghost" style="width:100%;">Cancelar</button>
+        </div>`;
+      document.body.appendChild(mo);
+      const lerCampos=()=>CAMPOS.filter(c=>mo.querySelector(`[data-campo="${c.key}"]`)?.checked);
+      document.getElementById("rel-cancel")?.addEventListener("click",()=>mo.remove());
+      mo.addEventListener("click",e=>{if(e.target===mo)mo.remove();});
+      document.getElementById("rel-csv")?.addEventListener("click",()=>{
+        const cols=lerCampos(); mo.remove();
+        const csv="\uFEFF"+[cols.map(c=>c.label).join(";"),
+          ...filtradas.map(v=>cols.map(c=>{const x=c.key==="data"?dateFormatBR(v[c.key]):v[c.key]||"";return x.includes(";")?`"${x}"`:x;}).join(";"))
+        ].join("\n");
+        const a=Object.assign(document.createElement("a"),{href:URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"})),download:`visitas_${new Date().toISOString().slice(0,10)}.csv`});
+        a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+      });
+      document.getElementById("rel-html")?.addEventListener("click",()=>{
+        const cols=lerCampos(); mo.remove();
+        gerarRelatorioHTML(filtradas,cols);
+      });
     }
 
-    // Relatório de visitas — janela HTML imprimível
-    function gerarRelatorioVisitas(){
-      const hoje=new Date().toISOString().slice(0,10);
-      const mes=new Date().toISOString().slice(0,7);
-      // Filtrar pelo estado atual do filtro
-      const filtradas=filtrarPorPeriodoGen(visitas,"data","_visFiltro");
-      if(!filtradas.length){toast("Nenhuma visita no período selecionado.","warning");return;}
-
-      const titulo=state._visFiltro==="hoje"?"Hoje":
-                   state._visFiltro==="semana"?"Esta Semana":
-                   state._visFiltro==="mes"?"Este Mês":"Todas as Visitas";
-
-      const corResultado=r=>{
-        if(!r) return "#888";
-        if(/pedido|realizado/i.test(r)) return "#00a86b";
-        if(/interesse|negoci/i.test(r)) return "#f59e0b";
-        if(/não|sem contato/i.test(r)) return "#ef4444";
-        return "#3b82f6";
-      };
-
-      const win=window.open("","_blank","width=900,height=700");
-      if(!win){toast("Permita popups para gerar o relatório.","warning");return;}
+    function gerarRelatorioHTML(filtradas, cols){
+      const titulo=state._visFiltro==="hoje"?"Hoje":state._visFiltro==="semana"?"Esta Semana":
+                   state._visFiltro==="mes"?"Este Mês":
+                   state._visDataInicio&&state._visDataFim?`${dateFormatBR(state._visDataInicio)} a ${dateFormatBR(state._visDataFim)}`:"Todas";
+      const corRes=r=>{if(!r)return"#888";if(/pedido|realizado/i.test(r))return"#00a86b";if(/interesse|negoci/i.test(r))return"#f59e0b";if(/não|sem contato/i.test(r))return"#ef4444";return"#3b82f6";};
+      const loja=filtradas.filter(v=>/pedido|realizado/i.test(v.resultado||"")).length;
+      const neg=filtradas.filter(v=>/interesse|negoci|aguard/i.test(v.resultado||"")).length;
+      const cidades=[...new Set(filtradas.map(v=>v.cidade).filter(Boolean))].length;
+      const win=window.open("","_blank","width=950,height=750");
+      if(!win){toast("Permita popups.","warning");return;}
       win.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/>
-        <title>Relatório de Visitas</title>
-        <style>
-          *{box-sizing:border-box;margin:0;padding:0;}
-          body{font-family:Arial,sans-serif;font-size:12px;color:#222;background:#fff;padding:20px;}
-          .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #1a2744;padding-bottom:12px;margin-bottom:16px;}
-          .header h1{font-size:20px;color:#1a2744;}
-          .header .sub{font-size:11px;color:#666;margin-top:4px;}
-          .stats{display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;}
-          .stat-box{background:#f4f6fa;border-radius:8px;padding:10px 16px;flex:1;min-width:120px;text-align:center;}
-          .stat-box .val{font-size:22px;font-weight:700;color:#1a2744;}
-          .stat-box .lbl{font-size:10px;color:#666;margin-top:2px;}
-          table{width:100%;border-collapse:collapse;font-size:11px;}
-          thead th{background:#1a2744;color:#fff;padding:8px 10px;text-align:left;}
-          tbody tr:nth-child(even){background:#f9fafb;}
-          tbody td{padding:7px 10px;border-bottom:1px solid #e5e7eb;vertical-align:top;}
-          .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600;color:#fff;}
-          .acao-cell{font-size:10px;color:#555;font-style:italic;}
-          .footer{margin-top:20px;font-size:10px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:10px;}
-          @media print{body{padding:10px;}.no-print{display:none;}}
-        </style>
-      </head><body>
-        <div class="no-print" style="margin-bottom:12px;display:flex;gap:8px;">
-          <button onclick="window.print()" style="padding:8px 16px;background:#1a2744;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">🖨️ Imprimir / Salvar PDF</button>
-          <button onclick="window.close()" style="padding:8px 16px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-size:13px;">✕ Fechar</button>
+        <title>Relatório Visitas</title>
+        <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:Arial,sans-serif;font-size:12px;background:#fff;color:#222;padding:20px;}
+        .no-print{margin-bottom:12px;display:flex;gap:8px;}.header{border-bottom:2px solid #1a2744;padding-bottom:12px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:flex-start;}
+        h1{font-size:18px;color:#1a2744;}.stats{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;}.stat{background:#f4f6fa;border-radius:8px;padding:10px 14px;flex:1;min-width:100px;text-align:center;}
+        .stat .v{font-size:20px;font-weight:700;color:#1a2744;}.stat .l{font-size:10px;color:#666;}
+        table{width:100%;border-collapse:collapse;font-size:11px;}thead th{background:#1a2744;color:#fff;padding:8px;text-align:left;}
+        tbody tr:nth-child(even){background:#f9fafb;}tbody td{padding:7px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;}
+        .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600;color:#fff;}
+        .footer{margin-top:20px;font-size:10px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:10px;}
+        @media print{.no-print{display:none;}}</style></head><body>
+        <div class="no-print">
+          <button onclick="window.print()" style="padding:8px 16px;background:#1a2744;color:#fff;border:none;border-radius:6px;cursor:pointer;">🖨️ Imprimir</button>
+          <button onclick="window.close()" style="padding:8px 16px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;cursor:pointer;">✕ Fechar</button>
         </div>
         <div class="header">
-          <div>
-            <h1>📋 Relatório de Visitas — ${esc(titulo)}</h1>
-            <div class="sub">Gerado em ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})} · CEFEQ Suprimentos Industriais</div>
+          <div><h1>📋 Relatório de Visitas — ${esc(titulo)}</h1>
+            <div style="font-size:11px;color:#666;margin-top:4px;">Gerado em ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})} · CEFEQ Suprimentos Industriais</div>
           </div>
-          <div style="text-align:right;font-size:11px;color:#666;">
-            <strong>${filtradas.length}</strong> visita${filtradas.length!==1?"s":""}<br/>
-            Período: ${esc(titulo)}
-          </div>
+          <div style="text-align:right;font-size:11px;"><strong>${filtradas.length}</strong> visita${filtradas.length!==1?"s":""}</div>
         </div>
-
-        <!-- Resumo estatístico -->
         <div class="stats">
-          <div class="stat-box"><div class="val">${filtradas.length}</div><div class="lbl">Total de visitas</div></div>
-          <div class="stat-box"><div class="val" style="color:#00a86b;">${filtradas.filter(v=>/pedido|realizado/i.test(v.resultado||"")).length}</div><div class="lbl">Pedidos realizados</div></div>
-          <div class="stat-box"><div class="val" style="color:#f59e0b;">${filtradas.filter(v=>/interesse|negoci|aguard/i.test(v.resultado||"")).length}</div><div class="lbl">Em andamento</div></div>
-          <div class="stat-box"><div class="val" style="color:#3b82f6;">${[...new Set(filtradas.map(v=>v.cidade).filter(Boolean))].length}</div><div class="lbl">Cidades</div></div>
+          <div class="stat"><div class="v">${filtradas.length}</div><div class="l">Total</div></div>
+          <div class="stat"><div class="v" style="color:#00a86b;">${loja}</div><div class="l">Pedidos</div></div>
+          <div class="stat"><div class="v" style="color:#f59e0b;">${neg}</div><div class="l">Em andamento</div></div>
+          <div class="stat"><div class="v" style="color:#3b82f6;">${cidades}</div><div class="l">Cidades</div></div>
         </div>
-
-        <table>
-          <thead>
-            <tr>
-              <th style="width:70px;">Data</th>
-              <th>Empresa</th>
-              <th style="width:110px;">Telefone</th>
-              <th style="width:80px;">Cidade</th>
-              <th>Resultado</th>
-              <th>Próxima Ação</th>
-              <th>Observações</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${filtradas.map(v=>`<tr>
-              <td style="white-space:nowrap;">${dateFormatBR(v.data)}</td>
-              <td><strong>${esc(v.nome||"")}</strong></td>
-              <td>${esc(v.telefone||"")}</td>
-              <td>${esc(v.cidade||"")}</td>
-              <td>${v.resultado?`<span class="badge" style="background:${corResultado(v.resultado)};">${esc(v.resultado)}</span>`:""}</td>
-              <td class="acao-cell">${esc(v.acao||"")}</td>
-              <td style="font-size:10px;color:#444;">${esc(v.obs||"")}</td>
-            </tr>`).join("")}
-          </tbody>
-        </table>
+        <table><thead><tr>${cols.map(c=>`<th>${c.label}</th>`).join("")}</tr></thead><tbody>
+          ${filtradas.map(v=>`<tr>${cols.map(c=>{
+            if(c.key==="data") return`<td style="white-space:nowrap;">${dateFormatBR(v.data)}</td>`;
+            if(c.key==="resultado"&&v.resultado) return`<td><span class="badge" style="background:${corRes(v.resultado)};">${esc(v.resultado)}</span></td>`;
+            if(c.key==="nome") return`<td><strong>${esc(v[c.key]||"")}</strong></td>`;
+            return`<td>${esc(v[c.key]||"")}</td>`;
+          }).join("")}</tr>`).join("")}
+        </tbody></table>
         <div class="footer">Desenvolvido por Willtech84 · SuperVenda</div>
       </body></html>`);
       win.document.close();
     }
 
-    // Render principal
+    // ── Aba Mapa ──────────────────────────────────────────────────────────────
+    function renderMapa(){
+      const cont=document.getElementById("sv-vis-mapa"); if(!cont) return;
+      const filtradas=getFiltradasPorPeriodo().filter(v=>v.lat&&String(v.lat).includes(","));
+      cont.innerHTML=`
+        <div class="card" style="margin-bottom:0;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">
+            🗺️ Mapa de visitas — ${filtradas.length} com localização
+          </div>
+          ${!filtradas.length?`<div style="padding:20px;text-align:center;color:var(--muted);">Nenhuma visita com geolocalização no período.<br><span style="font-size:11px;">Use o botão 📍 Localização ao registrar a visita.</span></div>`:`
+          <div id="sv-vis-leaflet" style="height:380px;border-radius:12px;overflow:hidden;"></div>`}
+        </div>`;
+      if(!filtradas.length) return;
+      function initLeaflet(){
+        const L=window.L;
+        const map=L.map("sv-vis-leaflet");
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
+        // Agrupar por cidade para heat-map visual
+        const cidadeCount={};
+        filtradas.forEach(v=>{
+          const c=v.cidade||"Sem cidade";
+          cidadeCount[c]=(cidadeCount[c]||0)+1;
+        });
+        const maxCount=Math.max(...Object.values(cidadeCount));
+        const bounds=[];
+        filtradas.forEach(v=>{
+          const[lat,lng]=String(v.lat).split(",").map(Number);
+          if(isNaN(lat)||isNaN(lng)) return;
+          bounds.push([lat,lng]);
+          const count=cidadeCount[v.cidade||"Sem cidade"]||1;
+          const intensity=Math.min(1,count/maxCount);
+          const radius=8+intensity*16;
+          const color=count>=5?"#ef4444":count>=3?"#f59e0b":"#3b82f6";
+          L.circleMarker([lat,lng],{radius,color,fillColor:color,fillOpacity:0.7,weight:2})
+            .addTo(map)
+            .bindPopup(`<strong>${esc(v.nome||"")}</strong><br>${esc(v.cidade||"")}<br>${v.data?dateFormatBR(v.data):""}<br>${v.resultado?`<span style="color:${color};">${esc(v.resultado)}</span>`:""}`);
+        });
+        if(bounds.length) map.fitBounds(bounds,{padding:[30,30]});
+        // Legenda
+        const leg=L.control({position:"bottomright"});
+        leg.onAdd=()=>{const d=L.DomUtil.create("div","");d.style.cssText="background:rgba(255,255,255,.9);padding:8px;border-radius:8px;font-size:11px;";d.innerHTML=`<strong>Visitas por área</strong><br><span style="color:#3b82f6;">● 1-2</span>  <span style="color:#f59e0b;">● 3-4</span>  <span style="color:#ef4444;">● 5+</span>`;return d;};
+        leg.addTo(map);
+      }
+      if(window.L){ initLeaflet(); return; }
+      const link=document.createElement("link");
+      link.rel="stylesheet"; link.href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+      document.head.appendChild(link);
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+      s.onload=()=>setTimeout(initLeaflet,100);
+      document.head.appendChild(s);
+    }
+
+    // ── Aba Gráficos ──────────────────────────────────────────────────────────
+    function renderGraficos(){
+      const cont=document.getElementById("sv-vis-graficos"); if(!cont) return;
+      const filtradas=getFiltradasPorPeriodo();
+      if(!filtradas.length){
+        cont.innerHTML=`<div class="card"><div style="padding:24px;text-align:center;color:var(--muted);">Nenhum dado no período.</div></div>`;
+        return;
+      }
+      // Agrupamentos
+      const porResultado={};
+      filtradas.forEach(v=>{const k=v.resultado||"Sem registro";porResultado[k]=(porResultado[k]||0)+1;});
+      const porCidade={};
+      filtradas.forEach(v=>{const k=v.cidade||"Sem cidade";porCidade[k]=(porCidade[k]||0)+1;});
+      const porData={};
+      filtradas.forEach(v=>{if(v.data)porData[v.data]=(porData[v.data]||0)+1;});
+      const CORES=["#00e676","#4488ff","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#84cc16","#f97316"];
+      function barChart(titulo,dados,cor="#4488ff"){
+        const max=Math.max(...Object.values(dados),1);
+        const entries=Object.entries(dados).sort((a,b)=>b[1]-a[1]).slice(0,10);
+        return`<div class="card" style="margin-bottom:10px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:12px;">${titulo}</div>
+          ${entries.map(([k,v],i)=>`
+            <div style="margin-bottom:8px;">
+              <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;">
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;margin-right:8px;">${esc(k)}</span>
+                <span style="font-weight:700;flex-shrink:0;">${v}</span>
+              </div>
+              <div style="background:var(--bg3);border-radius:4px;height:8px;overflow:hidden;">
+                <div style="background:${Array.isArray(cor)?cor[i%cor.length]:cor};height:100%;border-radius:4px;width:${Math.round(v/max*100)}%;transition:width .5s;"></div>
+              </div>
+            </div>`).join("")}
+        </div>`;
+      }
+      function pieChart(titulo,dados){
+        const total=Object.values(dados).reduce((a,b)=>a+b,0)||1;
+        const entries=Object.entries(dados).sort((a,b)=>b[1]-a[1]);
+        let cumAngle=0;
+        const paths=entries.map(([k,v],i)=>{
+          const pct=v/total; const angle=pct*360;
+          const r1=cumAngle*Math.PI/180; const r2=(cumAngle+angle)*Math.PI/180;
+          const x1=50+40*Math.sin(r1); const y1=50-40*Math.cos(r1);
+          const x2=50+40*Math.sin(r2); const y2=50-40*Math.cos(r2);
+          const largeArc=angle>180?1:0;
+          const d=`M50,50 L${x1},${y1} A40,40 0 ${largeArc},1 ${x2},${y2} Z`;
+          cumAngle+=angle;
+          return{d,color:CORES[i%CORES.length],k,v,pct};
+        });
+        return`<div class="card" style="margin-bottom:10px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:12px;">${titulo}</div>
+          <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+            <svg viewBox="0 0 100 100" style="width:140px;height:140px;flex-shrink:0;">
+              ${paths.map(p=>`<path d="${p.d}" fill="${p.color}" stroke="#080f1e" stroke-width="0.5"/>`).join("")}
+            </svg>
+            <div style="flex:1;min-width:120px;">
+              ${paths.map(p=>`
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                  <div style="width:10px;height:10px;border-radius:50%;background:${p.color};flex-shrink:0;"></div>
+                  <span style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${esc(p.k)}</span>
+                  <span style="font-size:11px;font-weight:700;flex-shrink:0;">${p.v} (${Math.round(p.pct*100)}%)</span>
+                </div>`).join("")}
+            </div>
+          </div>
+        </div>`;
+      }
+      // Gráfico de linha por data
+      const datasOrdenadas=Object.entries(porData).sort((a,b)=>a[0].localeCompare(b[0])).slice(-30);
+      const maxD=Math.max(...datasOrdenadas.map(x=>x[1]),1);
+      const lineChart=datasOrdenadas.length>1?`<div class="card" style="margin-bottom:10px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px;">📈 Visitas por dia</div>
+        <svg viewBox="0 0 300 80" style="width:100%;height:auto;">
+          <polyline fill="none" stroke="#4488ff" stroke-width="1.5"
+            points="${datasOrdenadas.map(([d,v],i)=>`${i*(300/(datasOrdenadas.length-1))},${80-v/maxD*70}`).join(" ")}"/>
+          ${datasOrdenadas.map(([d,v],i)=>`<circle cx="${i*(300/(datasOrdenadas.length-1))}" cy="${80-v/maxD*70}" r="3" fill="#4488ff">
+            <title>${dateFormatBR(d)}: ${v} visita${v!==1?"s":""}</title>
+          </circle>`).join("")}
+          <line x1="0" y1="78" x2="300" y2="78" stroke="var(--border)" stroke-width="0.5"/>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:4px;">
+          <span>${dateFormatBR(datasOrdenadas[0]?.[0])}</span>
+          <span>${dateFormatBR(datasOrdenadas[datasOrdenadas.length-1]?.[0])}</span>
+        </div>
+      </div>`:"";
+      cont.innerHTML=lineChart+pieChart("🎯 Por resultado",porResultado)+barChart("🏙️ Por cidade",porCidade,CORES);
+    }
+
+    // ── Render principal ──────────────────────────────────────────────────────
     root.innerHTML=`
       <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
@@ -3599,36 +3433,76 @@
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
             <button id="vis-nova-btn" class="btn btn-primary" style="width:auto;">+ Nova visita</button>
             <button id="vis-rel-btn" class="btn btn-secondary" style="font-size:12px;">📋 Relatório</button>
-            <button id="vis-export-btn" class="btn btn-secondary" style="font-size:12px;">📤 CSV</button>
             <button id="vis-refresh-btn" class="btn btn-secondary btn-icon" title="Atualizar">↻</button>
           </div>
         </div>
-        ${renderFiltroPeriodo("_visFiltro")}
-        <div class="search-wrap" style="margin-top:10px;">
-          <span class="search-icon">🔍</span>
-          <input id="sv-vis-busca" type="search" placeholder="Buscar visitas..." autocomplete="off"/>
+        <!-- Filtros de período -->
+        ${renderFiltros()}
+        <!-- Sub-abas -->
+        <div style="display:flex;gap:6px;margin-top:10px;border-bottom:1px solid var(--border);padding-bottom:0;">
+          <button id="vis-tab-lista" style="padding:8px 14px;border:none;border-bottom:2px solid ${state._visTab==="lista"?"var(--green)":"transparent"};background:transparent;color:${state._visTab==="lista"?"var(--green)":"var(--muted)"};font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;">📋 Lista</button>
+          <button id="vis-tab-mapa" style="padding:8px 14px;border:none;border-bottom:2px solid ${state._visTab==="mapa"?"var(--green)":"transparent"};background:transparent;color:${state._visTab==="mapa"?"var(--green)":"var(--muted)"};font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;">🗺️ Mapa</button>
+          <button id="vis-tab-graficos" style="padding:8px 14px;border:none;border-bottom:2px solid ${state._visTab==="graficos"?"var(--green)":"transparent"};background:transparent;color:${state._visTab==="graficos"?"var(--green)":"var(--muted)"};font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;">📊 Gráficos</button>
         </div>
         <div id="sv-vis-count" style="margin-top:6px;font-size:12px;color:var(--muted);">Carregando...</div>
       </div>
       <div id="sv-vis-form"></div>
-      <div id="sv-vis-lista"><div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">Carregando visitas...</div></div></div>`;
+      <div class="search-wrap" id="sv-vis-busca-wrap" style="margin:8px 0;${state._visTab!=="lista"?"display:none":""}">
+        <span class="search-icon">🔍</span>
+        <input id="sv-vis-busca" type="search" placeholder="Buscar visitas..." autocomplete="off"/>
+      </div>
+      <div id="sv-vis-lista" style="${state._visTab!=="lista"?"display:none":""}"></div>
+      <div id="sv-vis-mapa" style="${state._visTab!=="mapa"?"display:none":""}"></div>
+      <div id="sv-vis-graficos" style="${state._visTab!=="graficos"?"display:none":""}"></div>`;
 
-    // Carregar da API
+    // Carregar e renderizar
     await runWithUi(async()=>{
       await carregarVisitas();
       const cnt=document.getElementById("sv-vis-count");
-      if(cnt) cnt.textContent=`${visitas.length} visita${visitas.length!==1?"s":""} registrada${visitas.length!==1?"s":""}`;
+      if(cnt) cnt.textContent=`${visitas.length} visita${visitas.length!==1?"s":""}`;
       renderLista();
+      if(state._visTab==="mapa") renderMapa();
+      if(state._visTab==="graficos") renderGraficos();
     },"Carregando visitas...");
 
+    // Filtros de período
+    document.querySelectorAll("[data-vf]").forEach(btn=>{
+      btn.addEventListener("click",()=>{
+        state._visFiltro=btn.getAttribute("data-vf");
+        document.querySelectorAll("[data-vf]").forEach(b=>{
+          b.className=b.className.replace("btn-primary","btn-secondary");
+        });
+        btn.className=btn.className.replace("btn-secondary","btn-primary");
+        const wrap=document.getElementById("sv-vis-intervalo");
+        if(wrap) wrap.style.display=state._visFiltro==="intervalo"?"flex":"none";
+        renderLista(); if(state._visTab==="mapa") renderMapa(); if(state._visTab==="graficos") renderGraficos();
+      });
+    });
+    document.getElementById("vis-data-ini")?.addEventListener("change",e=>{state._visDataInicio=e.target.value;renderLista();if(state._visTab==="mapa")renderMapa();if(state._visTab==="graficos")renderGraficos();});
+    document.getElementById("vis-data-fim")?.addEventListener("change",e=>{state._visDataFim=e.target.value;renderLista();if(state._visTab==="mapa")renderMapa();if(state._visTab==="graficos")renderGraficos();});
+    // Sub-abas
+    function trocarTab(tab){
+      state._visTab=tab;
+      ["lista","mapa","graficos"].forEach(t=>{
+        const btn=document.getElementById(`vis-tab-${t}`);
+        const panel=document.getElementById(`sv-vis-${t}`);
+        if(btn){ btn.style.color=t===tab?"var(--green)":"var(--muted)"; btn.style.borderBottom=`2px solid ${t===tab?"var(--green)":"transparent"}`; }
+        if(panel) panel.style.display=t===tab?"":"none";
+      });
+      const bw=document.getElementById("sv-vis-busca-wrap");
+      if(bw) bw.style.display=tab==="lista"?"":"none";
+      if(tab==="mapa") renderMapa();
+      if(tab==="graficos") renderGraficos();
+    }
+    document.getElementById("vis-tab-lista")?.addEventListener("click",()=>trocarTab("lista"));
+    document.getElementById("vis-tab-mapa")?.addEventListener("click",()=>trocarTab("mapa"));
+    document.getElementById("vis-tab-graficos")?.addEventListener("click",()=>trocarTab("graficos"));
     document.getElementById("vis-nova-btn")?.addEventListener("click",()=>renderFormVisita(null));
-    document.getElementById("vis-rel-btn")?.addEventListener("click",gerarRelatorioVisitas);
-    document.getElementById("vis-export-btn")?.addEventListener("click",exportarVisitas);
+    document.getElementById("vis-rel-btn")?.addEventListener("click",abrirRelatorio);
     document.getElementById("vis-refresh-btn")?.addEventListener("click",async()=>{
-      await runWithUi(async()=>{ await carregarVisitas(); renderLista(); toast("Atualizado.","success"); },"Atualizando...");
+      await runWithUi(async()=>{ await carregarVisitas(); renderLista(); if(state._visTab==="mapa")renderMapa(); if(state._visTab==="graficos")renderGraficos(); toast("Atualizado.","success"); },"Atualizando...");
     });
     document.getElementById("sv-vis-busca")?.addEventListener("input",renderLista);
-    bindFiltroPeriodo("_visFiltro",renderLista);
   }
 
   // ─── Manuais ──────────────────────────────────────────────────────────────────
@@ -4137,6 +4011,329 @@
     document.getElementById("ven-novo-btn")?.addEventListener("click",()=>renderFormVenda(null));
     document.getElementById("ven-export-btn")?.addEventListener("click",exportarVendas);
     bindFiltroPeriodo("_venFiltro",renderLista);
+  }
+
+  // ─── Controle de Estoque ──────────────────────────────────────────────────────
+  async function renderEstoque(root){
+    const user=DB.getUser();
+    const isAdmin=user?.role==="admin";
+    let tabelas=[], itensPorTabela={}, tabelaAtiva=state._estTabelaId||"";
+
+    async function carregarTabelas(){
+      try{ tabelas=safeArray(await DB.request("/api/estoque-tabelas",{method:"GET"})); }
+      catch(e){ tabelas=[]; console.warn("tabelas:",e?.message); }
+      if(!tabelaAtiva&&tabelas.length) tabelaAtiva=tabelas[0].id;
+      state._estTabelaId=tabelaAtiva;
+    }
+    async function carregarItens(tabelaId){
+      if(!tabelaId) return;
+      try{
+        const items=safeArray(await DB.request(`/api/estoque-itens?tabela_id=${encodeURIComponent(tabelaId)}`,{method:"GET"}));
+        itensPorTabela[tabelaId]=items;
+      }catch(e){ itensPorTabela[tabelaId]=[]; }
+    }
+
+    const inSt=`width:100%;padding:8px 10px;background:var(--bg);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;`;
+
+    // ── Render tabela de itens ───────────────────────────────────────────────
+    function renderTabelaItens(){
+      const cont=document.getElementById("sv-est-itens"); if(!cont) return;
+      const tabela=tabelas.find(t=>t.id===tabelaAtiva);
+      const itens=itensPorTabela[tabelaAtiva]||[];
+      const q=String(document.getElementById("sv-est-busca")?.value||"").toLowerCase();
+      const filtrados=q?itens.filter(i=>String(i.produto||"").toLowerCase().includes(q)||String(i.codigo||"").toLowerCase().includes(q)):itens;
+
+      const bloqueados=itens.filter(i=>Number(i.bloqueado));
+
+      cont.innerHTML=`
+        <!-- Alerta de itens bloqueados -->
+        ${bloqueados.length?`<div style="background:rgba(255,82,82,.08);border:1px solid rgba(255,82,82,.25);border-radius:10px;padding:12px 14px;margin-bottom:10px;">
+          <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:6px;">🔒 ${bloqueados.length} item${bloqueados.length!==1?"ns":""} em reserva/bloqueado${bloqueados.length!==1?"s":""}</div>
+          ${bloqueados.map(i=>`<div style="font-size:12px;color:var(--muted);margin-top:3px;">• <strong>${esc(i.produto||"")}</strong>${i.bloqueado_motivo?` — ${esc(i.bloqueado_motivo)}`:""} <span style="color:var(--red);">(por ${esc(i.bloqueado_por||"")})</span></div>`).join("")}
+        </div>`:""}
+
+        <!-- Tabela de itens -->
+        <div style="overflow-x:auto;border-radius:12px;border:1px solid var(--border);">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:600px;">
+            <thead>
+              <tr style="background:var(--bg3);">
+                ${isAdmin?`<th style="width:36px;padding:10px 8px;text-align:center;border-bottom:1px solid var(--border);" title="Reordenar">☰</th>`:""}
+                <th style="padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Código</th>
+                <th style="padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Produto</th>
+                <th style="padding:10px 12px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Qtd</th>
+                <th style="padding:10px 12px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Mín</th>
+                <th style="padding:10px 12px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Un</th>
+                <th style="padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Obs</th>
+                <th style="padding:10px 12px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Status</th>
+                <th style="padding:10px 8px;border-bottom:1px solid var(--border);"></th>
+              </tr>
+            </thead>
+            <tbody id="sv-est-tbody">
+              ${filtrados.map(item=>{
+                const bloq=Number(item.bloqueado);
+                const baixoEst=Number(item.quantidade)<=Number(item.quantidade_min)&&Number(item.quantidade_min)>0;
+                const rowBg=bloq?"rgba(255,82,82,.04)":baixoEst?"rgba(255,179,0,.04)":"";
+                return`<tr data-item-id="${esc(item.id)}" style="border-bottom:1px solid var(--border);background:${rowBg};${bloq?"opacity:.75":""}">
+                  ${isAdmin?`<td style="padding:8px;text-align:center;cursor:grab;color:var(--muted);" class="drag-handle">⣿</td>`:""}
+                  <td style="padding:10px 12px;">
+                    <span style="font-family:monospace;font-size:12px;color:var(--muted);" class="edit-cell" data-field="codigo" data-id="${esc(item.id)}">${esc(item.codigo||"—")}</span>
+                  </td>
+                  <td style="padding:10px 12px;font-weight:600;">
+                    <span class="edit-cell" data-field="produto" data-id="${esc(item.id)}">${esc(item.produto||"")}</span>
+                    ${bloq?`<div style="font-size:10px;color:var(--red);">🔒 ${esc(item.bloqueado_motivo||"Reservado")}</div>`:""}
+                  </td>
+                  <td style="padding:10px 12px;text-align:center;">
+                    <span class="edit-cell edit-number" data-field="quantidade" data-id="${esc(item.id)}" style="font-size:15px;font-weight:700;color:${bloq?"var(--red)":baixoEst?"var(--amber)":"var(--green)"};">${Number(item.quantidade||0)}</span>
+                  </td>
+                  <td style="padding:10px 12px;text-align:center;">
+                    <span class="edit-cell edit-number" data-field="quantidade_min" data-id="${esc(item.id)}" style="font-size:12px;color:var(--muted);">${Number(item.quantidade_min||0)}</span>
+                  </td>
+                  <td style="padding:10px 12px;text-align:center;">
+                    <span class="edit-cell" data-field="unidade" data-id="${esc(item.id)}" style="font-size:12px;color:var(--muted);">${esc(item.unidade||"UN")}</span>
+                  </td>
+                  <td style="padding:10px 12px;max-width:180px;">
+                    <span class="edit-cell" data-field="obs" data-id="${esc(item.id)}" style="font-size:11px;color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(item.obs||"")}">${esc(item.obs||"—")}</span>
+                  </td>
+                  <td style="padding:10px 8px;text-align:center;">
+                    <button class="btn-bloquear" data-id="${esc(item.id)}" data-bloq="${bloq}" title="${bloq?"Desbloquear":"Bloquear para venda"}"
+                      style="padding:5px 8px;border:none;border-radius:6px;cursor:pointer;font-size:12px;background:${bloq?"rgba(0,230,118,.12)":"rgba(255,82,82,.1)"};color:${bloq?"var(--green)":"var(--red)"};font-family:var(--font);">
+                      ${bloq?"🔓":"🔒"}
+                    </button>
+                  </td>
+                  <td style="padding:10px 8px;text-align:center;">
+                    ${isAdmin?`<button class="btn-del-item" data-id="${esc(item.id)}" style="padding:5px 8px;border:none;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;">🗑️</button>`:""}
+                  </td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Rodapé -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;font-size:12px;color:var(--muted);">
+          <span>${filtrados.length} item${filtrados.length!==1?"ns":""}</span>
+          <span style="color:var(--amber);">⚠️ Clique em qualquer valor para editar inline</span>
+        </div>`;
+
+      bindTabelaEvents();
+    }
+
+    // ── Edição inline ────────────────────────────────────────────────────────
+    function bindTabelaEvents(){
+      const tbody=document.getElementById("sv-est-tbody"); if(!tbody) return;
+
+      // Edição inline ao clicar
+      tbody.querySelectorAll(".edit-cell").forEach(cell=>{
+        cell.style.cursor="pointer";
+        cell.style.padding="2px 4px";
+        cell.style.borderRadius="4px";
+        cell.style.transition="background .15s";
+        cell.addEventListener("mouseover",()=>{ cell.style.background="rgba(68,136,255,.1)"; });
+        cell.addEventListener("mouseout",()=>{ cell.style.background=""; });
+        cell.addEventListener("click",()=>{
+          const field=cell.getAttribute("data-field");
+          const id=cell.getAttribute("data-id");
+          const currentVal=cell.textContent.replace("—","").trim();
+          const isNum=cell.classList.contains("edit-number");
+          const input=document.createElement("input");
+          input.type=isNum?"number":"text";
+          input.value=currentVal;
+          input.style.cssText=`width:${isNum?"60px":"140px"};padding:4px 6px;background:var(--bg);border:1px solid var(--green);border-radius:6px;color:var(--text);font-family:var(--font);font-size:${isNum?"14px":"12px"};text-align:${isNum?"center":"left"};outline:none;`;
+          cell.innerHTML=""; cell.appendChild(input); input.focus(); input.select();
+          const salvar=async()=>{
+            const val=input.value.trim();
+            cell.textContent=val||"—";
+            const payload={[field]:isNum?Number(val):val.toUpperCase()};
+            try{
+              await DB.request(`/api/estoque-itens/${encodeURIComponent(id)}`,{method:"PUT",body:JSON.stringify(payload)});
+              const itens=itensPorTabela[tabelaAtiva]||[];
+              const idx=itens.findIndex(x=>x.id===id);
+              if(idx>=0) itens[idx]={...itens[idx],...payload};
+            }catch(e){
+              if(!e?.offline) toast(e?.message||"Erro ao salvar","error");
+            }
+            renderTabelaItens();
+          };
+          input.addEventListener("blur",salvar);
+          input.addEventListener("keydown",e=>{if(e.key==="Enter")salvar();if(e.key==="Escape"){cell.textContent=currentVal||"—";}});
+        });
+      });
+
+      // Bloquear/desbloquear
+      tbody.querySelectorAll(".btn-bloquear").forEach(btn=>{
+        btn.addEventListener("click",async()=>{
+          const id=btn.getAttribute("data-id");
+          const bloq=Number(btn.getAttribute("data-bloq"));
+          const novoBloquear=!bloq;
+          let motivo="";
+          if(novoBloquear){
+            motivo=prompt("Motivo do bloqueio (ex: reservado para cliente X):")||"Reservado";
+            if(motivo===null) return; // cancelou
+          }
+          if(!novoBloquear&&!confirm("Desbloquear este item?")) return;
+          await runWithUi(async()=>{
+            await DB.request(`/api/estoque-itens/${encodeURIComponent(id)}`,{
+              method:"PUT",
+              body:JSON.stringify({bloqueado:novoBloquear?1:0,bloqueado_motivo:motivo})
+            });
+            const itens=itensPorTabela[tabelaAtiva]||[];
+            const idx=itens.findIndex(x=>x.id===id);
+            if(idx>=0){
+              itens[idx]={...itens[idx],bloqueado:novoBloquear?1:0,
+                bloqueado_por:novoBloquear?DB.getUser()?.name||"":""  ,
+                bloqueado_motivo:motivo};
+            }
+            // Notificação de bloqueio para todos
+            if(novoBloquear){
+              const item=itens.find(x=>x.id===id);
+              toast(`🔒 "${item?.produto||id}" bloqueado — ${motivo}`,"warning",7000);
+              // Registrar no estado para outros usuários verem ao sincronizar
+              state._estUltimoBloquio={id,produto:item?.produto,motivo,por:DB.getUser()?.name,ts:Date.now()};
+            } else {
+              toast(`🔓 Item desbloqueado com sucesso.`,"success",3000);
+            }
+            renderTabelaItens();
+          },novoBloquear?"Bloqueando...":"Desbloqueando...");
+        });
+      });
+
+      // Excluir item
+      tbody.querySelectorAll(".btn-del-item").forEach(btn=>{
+        btn.addEventListener("click",async()=>{
+          const id=btn.getAttribute("data-id");
+          const itens=itensPorTabela[tabelaAtiva]||[];
+          const item=itens.find(x=>x.id===id);
+          if(!confirm(`Excluir "${item?.produto||id}"?`)) return;
+          await runWithUi(async()=>{
+            await DB.request(`/api/estoque-itens/${encodeURIComponent(id)}`,{method:"DELETE"});
+            itensPorTabela[tabelaAtiva]=(itensPorTabela[tabelaAtiva]||[]).filter(x=>x.id!==id);
+            renderTabelaItens();
+          },"Excluindo...");
+        });
+      });
+    }
+
+    // ── Render principal ─────────────────────────────────────────────────────
+    root.innerHTML=`
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <div class="card-title">📦 Controle de Estoque</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            ${isAdmin?`<button id="est-nova-tabela" class="btn btn-secondary" style="font-size:12px;">➕ Nova tabela</button>`:""}
+            <button id="est-add-item" class="btn btn-primary" style="width:auto;font-size:13px;">+ Adicionar item</button>
+            <button id="est-refresh" class="btn btn-secondary btn-icon">↻</button>
+          </div>
+        </div>
+        <!-- Seletor de tabelas -->
+        <div id="sv-est-tabs" style="display:flex;gap:6px;margin-top:10px;overflow-x:auto;padding-bottom:4px;"></div>
+        <!-- Busca -->
+        <div class="search-wrap" style="margin-top:10px;">
+          <span class="search-icon">🔍</span>
+          <input id="sv-est-busca" type="search" placeholder="Buscar produto ou código..." autocomplete="off"/>
+        </div>
+      </div>
+      <div id="sv-est-itens" style="margin-top:0;"></div>`;
+
+    // Carregar dados
+    await runWithUi(async()=>{
+      await carregarTabelas();
+      if(tabelaAtiva) await carregarItens(tabelaAtiva);
+    },"Carregando estoque...");
+
+    function renderTabsTabelas(){
+      const cont=document.getElementById("sv-est-tabs"); if(!cont) return;
+      cont.innerHTML=tabelas.map(t=>`
+        <button class="btn ${t.id===tabelaAtiva?"btn-primary":"btn-secondary"}" data-tab-id="${esc(t.id)}"
+          style="font-size:12px;white-space:nowrap;flex-shrink:0;">
+          ${esc(t.titulo)}
+          ${isAdmin?`<span class="est-edit-tab" data-tab-id="${esc(t.id)}" style="margin-left:6px;opacity:.6;font-size:10px;" title="Editar">✏️</span>`:""}
+        </button>`).join("")+
+        (isAdmin?`<button id="est-nova-tab-inline" style="padding:7px 12px;background:transparent;border:1px dashed var(--border-hi);border-radius:8px;color:var(--muted);font-size:12px;cursor:pointer;white-space:nowrap;flex-shrink:0;">+ Nova</button>`:"");
+
+      cont.querySelectorAll("[data-tab-id]").forEach(btn=>{
+        btn.addEventListener("click",async(e)=>{
+          if(e.target.classList.contains("est-edit-tab")){
+            const id=e.target.getAttribute("data-tab-id");
+            const t=tabelas.find(x=>x.id===id);
+            const novo=prompt("Título da tabela:",t?.titulo||"");
+            if(novo&&novo!==t?.titulo){
+              await DB.request(`/api/estoque-tabelas/${encodeURIComponent(id)}`,{method:"PUT",body:JSON.stringify({titulo:novo})});
+              t.titulo=novo; renderTabsTabelas();
+            }
+            return;
+          }
+          tabelaAtiva=btn.getAttribute("data-tab-id");
+          state._estTabelaId=tabelaAtiva;
+          if(!itensPorTabela[tabelaAtiva]){
+            await runWithUi(()=>carregarItens(tabelaAtiva),"Carregando...");
+          }
+          renderTabsTabelas(); renderTabelaItens();
+        });
+      });
+      document.getElementById("est-nova-tab-inline")?.addEventListener("click",()=>{
+        document.getElementById("est-nova-tabela")?.click();
+      });
+    }
+
+    renderTabsTabelas();
+    renderTabelaItens();
+
+    // Botão nova tabela
+    document.getElementById("est-nova-tabela")?.addEventListener("click",async()=>{
+      const titulo=prompt("Nome da nova tabela de estoque:");
+      if(!titulo) return;
+      await runWithUi(async()=>{
+        const nova=await DB.request("/api/estoque-tabelas",{method:"POST",body:JSON.stringify({titulo})});
+        if(nova?.id){
+          tabelas.unshift({id:nova.id,titulo,descricao:""});
+          tabelaAtiva=nova.id; state._estTabelaId=nova.id;
+          itensPorTabela[tabelaAtiva]=[];
+          renderTabsTabelas(); renderTabelaItens();
+          toast(`✅ Tabela "${titulo}" criada.`,"success");
+        }
+      },"Criando tabela...");
+    });
+
+    // Botão adicionar item
+    document.getElementById("est-add-item")?.addEventListener("click",async()=>{
+      if(!tabelaAtiva){toast("Selecione ou crie uma tabela primeiro.","warning");return;}
+      const produto=prompt("Nome do produto:");
+      if(!produto) return;
+      const codigo=prompt("Código (opcional):")||"";
+      const qtd=Number(prompt("Quantidade inicial:","0")||0);
+      const qtdMin=Number(prompt("Quantidade mínima (alerta estoque baixo):","0")||0);
+      await runWithUi(async()=>{
+        const novo=await DB.request("/api/estoque-itens",{
+          method:"POST",
+          body:JSON.stringify({tabela_id:tabelaAtiva,produto:produto.toUpperCase(),codigo:codigo.toUpperCase(),quantidade:qtd,quantidade_min:qtdMin,unidade:"UN"})
+        });
+        if(novo?.id){
+          if(!itensPorTabela[tabelaAtiva]) itensPorTabela[tabelaAtiva]=[];
+          itensPorTabela[tabelaAtiva].push({id:novo.id,produto:produto.toUpperCase(),codigo:codigo.toUpperCase(),quantidade:qtd,quantidade_min:qtdMin,unidade:"UN",obs:"",bloqueado:0});
+          renderTabelaItens();
+          toast(`✅ "${produto}" adicionado.`,"success");
+        }
+      },"Adicionando...");
+    });
+
+    // Busca
+    document.getElementById("sv-est-busca")?.addEventListener("input",renderTabelaItens);
+
+    // Refresh
+    document.getElementById("est-refresh")?.addEventListener("click",async()=>{
+      await runWithUi(async()=>{
+        await carregarTabelas();
+        if(tabelaAtiva) await carregarItens(tabelaAtiva);
+        renderTabsTabelas(); renderTabelaItens();
+        toast("Atualizado.","success");
+      },"Atualizando...");
+    });
+
+    // Verificar bloqueios ao carregar (notificar se houve bloqueio recente)
+    const ul=state._estUltimoBloquio;
+    if(ul&&Date.now()-ul.ts<60000){
+      toast(`🔒 "${ul.produto}" bloqueado por ${ul.por} — ${ul.motivo}`,"warning",6000);
+    }
   }
 
   // ─── Rotas com Geolocalização ─────────────────────────────────────────────────
