@@ -1,5 +1,5 @@
-// SuperVenda Service Worker — Offline First
-const CACHE_NAME = 'supervenda-v1';
+// SuperVenda Service Worker — Offline First v2
+const CACHE_NAME = 'supervenda-v2';
 const OFFLINE_QUEUE_KEY = 'sv_offline_queue';
 
 // Arquivos para cachear (shell do app)
@@ -8,14 +8,14 @@ const CACHE_ASSETS = [
   '/index.html',
   '/app.js',
   '/db.js',
-  '/config.js',
+  '/manifest.json',
 ];
 
 // ── Install: cachear shell do app ────────────────────────────────────────────
 self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE_NAME)
-      .then(c => c.addAll(CACHE_ASSETS).catch(() => {}))
+      .then(c => c.addAll(CACHE_ASSETS.map(url => new Request(url, {cache: 'reload'}))).catch(() => {}))
       .then(() => self.skipWaiting())
   );
 });
@@ -29,46 +29,89 @@ self.addEventListener('activate', e => {
   );
 });
 
-// ── Fetch: cache-first para assets, network-first para API ──────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
+function isApiRequest(url) {
+  return url.pathname.startsWith('/api/');
+}
+
+function isLocalAsset(url) {
+  // Considera como asset local: mesmo origin, ou sem hostname (relativo)
+  return url.hostname === self.location.hostname ||
+         url.hostname === 'localhost' ||
+         url.hostname === '127.0.0.1';
+}
+
+function isCdnRequest(url) {
+  return url.hostname.includes('cdnjs.cloudflare.com') ||
+         url.hostname.includes('unpkg.com') ||
+         url.hostname.includes('nominatim.openstreetmap.org') ||
+         url.hostname.includes('tile.openstreetmap.org');
+}
+
+// ── Fetch ────────────────────────────────────────────────────────────────────
 self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET' && !isApiRequest(new URL(e.request.url))) return;
+
   const url = new URL(e.request.url);
 
-  // API calls: network-first, sem cache
-  if (url.pathname.startsWith('/api/')) {
+  // API calls: network-first, fallback offline response
+  if (isApiRequest(url)) {
     e.respondWith(
-      fetch(e.request.clone())
-        .catch(() => new Response(
+      fetch(e.request.clone()).catch(() =>
+        new Response(
           JSON.stringify({ error: 'offline', offline: true }),
           { status: 503, headers: { 'Content-Type': 'application/json' } }
-        ))
+        )
+      )
     );
     return;
   }
 
-  // Fontes e CDN externos: network com fallback
-  if (!url.hostname.includes('pages.dev') && !url.hostname.includes('localhost') && url.protocol === 'https:') {
+  // CDN externos: network com cache
+  if (isCdnRequest(url)) {
     e.respondWith(
-      fetch(e.request).catch(() => caches.match(e.request))
+      caches.match(e.request).then(cached => {
+        if (cached) return cached;
+        return fetch(e.request).then(resp => {
+          if (resp && resp.status === 200) {
+            const toCache = resp.clone();
+            caches.open(CACHE_NAME).then(c => c.put(e.request, toCache));
+          }
+          return resp;
+        }).catch(() => cached || new Response('', {status: 503}));
+      })
     );
     return;
   }
 
-  // Assets locais: cache-first
-  e.respondWith(
-    caches.match(e.request).then(cached => {
-      if (cached) return cached;
-      return fetch(e.request).then(resp => {
-        if (resp && resp.status === 200 && e.request.method === 'GET') {
-          const toCache = resp.clone();
-          caches.open(CACHE_NAME).then(c => c.put(e.request, toCache));
+  // Assets locais: cache-first com network fallback
+  if (isLocalAsset(url)) {
+    e.respondWith(
+      caches.match(e.request).then(cached => {
+        const networkFetch = fetch(e.request).then(resp => {
+          if (resp && resp.status === 200 && e.request.method === 'GET') {
+            const toCache = resp.clone();
+            caches.open(CACHE_NAME).then(c => c.put(e.request, toCache));
+          }
+          return resp;
+        }).catch(() => null);
+
+        // Retornar cache imediato + atualizar em background
+        if (cached) {
+          networkFetch.catch(() => {}); // atualiza em bg
+          return cached;
         }
-        return resp;
-      }).catch(() => caches.match('/index.html'));
-    })
-  );
+        return networkFetch.then(r => r || caches.match('/index.html'));
+      })
+    );
+    return;
+  }
+
+  // Outros (nominatim, etc): network normal
+  e.respondWith(fetch(e.request).catch(() => new Response('', {status: 503})));
 });
 
-// ── Background Sync: processar fila offline ──────────────────────────────────
+// ── Background Sync ──────────────────────────────────────────────────────────
 self.addEventListener('sync', e => {
   if (e.tag === 'sv-sync-queue') {
     e.waitUntil(processarFila());
@@ -76,7 +119,6 @@ self.addEventListener('sync', e => {
 });
 
 async function processarFila() {
-  // Notificar clientes para processar a fila
   const clients = await self.clients.matchAll();
   clients.forEach(c => c.postMessage({ type: 'PROCESS_QUEUE' }));
 }
@@ -85,7 +127,6 @@ async function processarFila() {
 self.addEventListener('message', e => {
   if (e.data?.type === 'SKIP_WAITING') self.skipWaiting();
   if (e.data?.type === 'CACHE_UPDATE') {
-    // Atualizar cache quando app receber novos assets
     caches.open(CACHE_NAME).then(c => {
       CACHE_ASSETS.forEach(url => {
         fetch(url).then(r => { if (r.ok) c.put(url, r); }).catch(() => {});
