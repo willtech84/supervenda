@@ -1406,13 +1406,12 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
           const body = await readJson<any>(req);
           const id = "EI-" + String(Date.now()).slice(-8) + Math.random().toString(36).slice(2,5).toUpperCase();
           await env.DB.prepare(
-            `INSERT INTO estoque_itens (id,vendor_id,tabela_id,codigo,produto,quantidade,quantidade_min,valor_unit,unidade,obs,bloqueado,bloqueado_por,bloqueado_motivo,ordem,updated_at,created_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+            `INSERT INTO estoque_itens (id,vendor_id,tabela_id,codigo,produto,quantidade,quantidade_min,unidade,obs,bloqueado,bloqueado_por,bloqueado_motivo,ordem,updated_at,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
           ).bind(
             id, effectiveVendorId, body.tabela_id||"",
             body.codigo||"", body.produto||"",
             Number(body.quantidade||0), Number(body.quantidade_min||0),
-            Number(body.valor_unit||0),
             body.unidade||"UN", body.obs||"",
             0, "", "", Number(body.ordem||0),
             nowISO(), nowISO()
@@ -1440,14 +1439,13 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
 
           await env.DB.prepare(
             `UPDATE estoque_itens SET
-              codigo=?,produto=?,quantidade=?,quantidade_min=?,valor_unit=?,unidade=?,obs=?,
+              codigo=?,produto=?,quantidade=?,quantidade_min=?,unidade=?,obs=?,
               bloqueado=?,bloqueado_por=?,bloqueado_motivo=?,ordem=?,updated_at=?
              WHERE id=? AND vendor_id=?`
           ).bind(
             body.codigo||item.codigo, body.produto||item.produto,
             Number(body.quantidade??item.quantidade), Number(body.quantidade_min??item.quantidade_min),
-            Number(body.valor_unit??item.valor_unit??0),
-            body.unidade||item.unidade, body.obs??item.obs,
+            body.unidade||item.unidade, body.obs||item.obs,
             bloqueado, bloqueadoPor, bloqueadoMotivo,
             Number(body.ordem||item.ordem), nowISO(),
             p[2], effectiveVendorId
