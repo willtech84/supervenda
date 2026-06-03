@@ -1315,6 +1315,62 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
       }
 
       /** =================== VISITAS =================== **/
+      // ──────────────────────────────────────────────────────────────────
+      // /api/vendas  — Vendas Diárias (salvo no D1, não localStorage)
+      // ──────────────────────────────────────────────────────────────────
+      if (p[1] === "vendas") {
+        if (req.method === "GET" && !p[2]) {
+          const since = url.searchParams.get("since") || "";
+          let q = "SELECT * FROM vendas WHERE vendor_id=?";
+          const binds: any[] = [effectiveVendorId];
+          if (since) { q += " AND data >= ?"; binds.push(since); }
+          q += " ORDER BY data DESC, created_at DESC LIMIT 500";
+          const rows = await env.DB.prepare(q).bind(...binds).all<any>();
+          return json(rows.results || []);
+        }
+
+        if (req.method === "POST") {
+          const body = await readJson<any>(req);
+          const id = String(body.id || body._id || "").trim() || ("VD-" + Date.now() + "-" + Math.random().toString(36).slice(2,6));
+          await env.DB.prepare(
+            `INSERT INTO vendas (id,vendor_id,data,tipo,valor,obs,updated_at,created_at)
+             VALUES (?,?,?,?,?,?,?,?)
+             ON CONFLICT(id) DO UPDATE SET
+               data=excluded.data, tipo=excluded.tipo, valor=excluded.valor,
+               obs=excluded.obs, updated_at=excluded.updated_at`
+          ).bind(
+            id, effectiveVendorId,
+            body.data || new Date().toISOString().slice(0,10),
+            body.tipo || "LOJA",
+            Number(body.valor || 0),
+            body.obs || "",
+            nowISO(), nowISO()
+          ).run();
+          const row = await env.DB.prepare("SELECT * FROM vendas WHERE id=? AND vendor_id=?")
+            .bind(id, effectiveVendorId).first();
+          return json(row);
+        }
+
+        if (req.method === "PUT" && p[2]) {
+          const body = await readJson<any>(req);
+          await env.DB.prepare(
+            `UPDATE vendas SET data=?,tipo=?,valor=?,obs=?,updated_at=? WHERE id=? AND vendor_id=?`
+          ).bind(
+            body.data || "", body.tipo || "LOJA", Number(body.valor || 0),
+            body.obs || "", nowISO(), p[2], effectiveVendorId
+          ).run();
+          const row = await env.DB.prepare("SELECT * FROM vendas WHERE id=? AND vendor_id=?")
+            .bind(p[2], effectiveVendorId).first();
+          return json(row);
+        }
+
+        if (req.method === "DELETE" && p[2]) {
+          await env.DB.prepare("DELETE FROM vendas WHERE id=? AND vendor_id=?")
+            .bind(p[2], effectiveVendorId).run();
+          return json({ ok: true });
+        }
+      }
+
       if (p[1] === "visitas") {
         if (req.method === "GET" && !p[2]) {
           const rows = await env.DB.prepare(
@@ -1406,12 +1462,13 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
           const body = await readJson<any>(req);
           const id = "EI-" + String(Date.now()).slice(-8) + Math.random().toString(36).slice(2,5).toUpperCase();
           await env.DB.prepare(
-            `INSERT INTO estoque_itens (id,vendor_id,tabela_id,codigo,produto,quantidade,quantidade_min,unidade,obs,bloqueado,bloqueado_por,bloqueado_motivo,ordem,updated_at,created_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+            `INSERT INTO estoque_itens (id,vendor_id,tabela_id,codigo,produto,quantidade,quantidade_min,valor_unit,unidade,obs,bloqueado,bloqueado_por,bloqueado_motivo,ordem,updated_at,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
           ).bind(
             id, effectiveVendorId, body.tabela_id||"",
             body.codigo||"", body.produto||"",
             Number(body.quantidade||0), Number(body.quantidade_min||0),
+            Number(body.valor_unit||0),
             body.unidade||"UN", body.obs||"",
             0, "", "", Number(body.ordem||0),
             nowISO(), nowISO()
@@ -1439,13 +1496,14 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
 
           await env.DB.prepare(
             `UPDATE estoque_itens SET
-              codigo=?,produto=?,quantidade=?,quantidade_min=?,unidade=?,obs=?,
+              codigo=?,produto=?,quantidade=?,quantidade_min=?,valor_unit=?,unidade=?,obs=?,
               bloqueado=?,bloqueado_por=?,bloqueado_motivo=?,ordem=?,updated_at=?
              WHERE id=? AND vendor_id=?`
           ).bind(
             body.codigo||item.codigo, body.produto||item.produto,
             Number(body.quantidade??item.quantidade), Number(body.quantidade_min??item.quantidade_min),
-            body.unidade||item.unidade, body.obs||item.obs,
+            Number(body.valor_unit??item.valor_unit??0),
+            body.unidade||item.unidade, body.obs??item.obs,
             bloqueado, bloqueadoPor, bloqueadoMotivo,
             Number(body.ordem||item.ordem), nowISO(),
             p[2], effectiveVendorId
