@@ -4143,34 +4143,52 @@
 
     async function carregarVendas(){
       try{
-        const rows=safeArray(await DB.request("/api/vendas",{method:"GET"}));
+        const resp=await DB.request("/api/vendas",{method:"GET"});
+        // Se a tabela não existe ainda no D1, a API retorna erro
+        if(!resp&&resp!==null){
+          throw new Error("Resposta inválida da API de vendas");
+        }
+        const rows=safeArray(resp);
         vendas=rows;
         _carregado=true;
         // Migração única: se tinha dados no localStorage, sobe para o D1
-        const KEY_LOCAL="sv_vendas_diarias";
-        const LEGADAS=["sv_vendas","vendas_diarias","supervenda_vendas",KEY_LOCAL];
+        const LEGADAS=["sv_vendas_diarias","sv_vendas","vendas_diarias","supervenda_vendas"];
         for(const k of LEGADAS){
           try{
             const local=JSON.parse(localStorage.getItem(k)||"[]");
-            if(!local.length) continue;
-            // Verificar se já foram migrados (ids iguais)
+            if(!Array.isArray(local)||!local.length) continue;
             const idsRemoto=new Set(vendas.map(v=>String(v.id||v._id)));
             const novos=local.filter(v=>!idsRemoto.has(String(v._id||v.id)));
             if(!novos.length){localStorage.removeItem(k);continue;}
+            let migrados=0;
             for(const v of novos){
-              try{await DB.request("/api/vendas",{method:"POST",body:JSON.stringify(v)});}catch{}
+              try{
+                const salvo=await DB.request("/api/vendas",{method:"POST",body:JSON.stringify({
+                  id:v._id||v.id||("VD-"+Date.now()+"-"+Math.random().toString(36).slice(2,5)),
+                  data:v.data||new Date().toISOString().slice(0,10),
+                  tipo:v.tipo||"LOJA",
+                  valor:Number(v.valor||0),
+                  obs:v.obs||""
+                })});
+                if(salvo) migrados++;
+              }catch{}
             }
             localStorage.removeItem(k);
-            toast(`✅ ${novos.length} lançamento(s) migrados para a nuvem.`,"success",4000);
-            // Recarregar
+            if(migrados) toast(`✅ ${migrados} lançamento(s) migrados para a nuvem.`,"success",4000);
+            // Recarregar do D1 após migração
             const fresh=safeArray(await DB.request("/api/vendas",{method:"GET"}));
             vendas=fresh;
-          }catch{}
+          }catch(me){console.warn("Migração vendas:",me?.message);}
         }
       }catch(e){
-        // Fallback offline: usar localStorage se API falhar
+        const msg=String(e?.message||"");
+        if(msg.includes("no such table")||msg.includes("table vendas")){
+          toast("⚠️ Tabela 'vendas' não encontrada no D1. Execute o SQL de migração v36.","warning",8000);
+        } else {
+          console.warn("Vendas offline/erro:",msg);
+        }
+        // Fallback: carregar do localStorage se disponível
         try{vendas=JSON.parse(localStorage.getItem("sv_vendas_diarias")||"[]");}catch{vendas=[];}
-        console.warn("Vendas offline:",e?.message);
       }
     }
 
@@ -4824,39 +4842,56 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
       if(!tabelaAtiva){toast("Selecione uma tabela primeiro.","warning");return;}
       const mercadorias=safeArray(state.cache.mercadorias);
       if(!mercadorias.length){toast("Nenhuma mercadoria cadastrada.","warning");return;}
-      const itensAtuais=itensPorTabela[tabelaAtiva]||[];
+
+      // ── Construir modal UMA VEZ — só a lista é atualizada ────────────────
       const mo=document.createElement("div");
       mo.style.cssText="position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.7);display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;";
-      let q="";
-      function renderModal(){
-        const filtradas=q?mercadorias.filter(m=>String(m.nome||"").toLowerCase().includes(q.toLowerCase())||String(m.codigo||"").toLowerCase().includes(q.toLowerCase())):mercadorias;
-        mo.innerHTML=`<div style="background:var(--bg);border-radius:16px;padding:20px;width:100%;max-width:480px;max-height:85vh;overflow-y:auto;margin:auto;">
-          <div style="font-size:15px;font-weight:700;margin-bottom:12px;">📦 Importar de Mercadorias</div>
-          <input id="est-merc-q" type="search" placeholder="Buscar produto..." value="${esc(q)}"
-            style="width:100%;padding:8px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;margin-bottom:10px;"/>
-          <div style="display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto;">
-            ${filtradas.map(m=>{
-              const jaTem=itensAtuais.some(i=>String(i.codigo||"").toUpperCase()===String(m.codigo||m.sku||"").toUpperCase()&&i.codigo);
-              return`<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${jaTem?"opacity:.5":""}">
-                <div style="flex:1;overflow:hidden;">
-                  <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.nome||"")}</div>
-                  <div style="font-size:11px;color:var(--muted);">Cód: ${esc(m.codigo||m.sku||"—")} · R$ ${Number(m.valor_venda||m.valorVenda||0).toFixed(2)}</div>
-                </div>
-                ${jaTem?`<span style="font-size:11px;color:var(--amber);">já importado</span>`:`<button class="btn btn-primary" style="font-size:12px;padding:5px 10px;" data-merc-id="${esc(m.id||m._id||"")}">+ Adicionar</button>`}
-              </div>`;
-            }).join("")}
-            ${filtradas.length===0?`<div style="padding:16px;text-align:center;color:var(--muted);">Nenhum resultado.</div>`:""}
-          </div>
-          <button id="est-merc-close" class="btn btn-ghost" style="width:100%;margin-top:12px;">Fechar</button>
+      mo.innerHTML=`
+        <div id="est-merc-inner" style="background:var(--bg);border-radius:16px;padding:20px;width:100%;max-width:480px;max-height:85vh;overflow-y:auto;margin:auto;display:flex;flex-direction:column;gap:10px;">
+          <div style="font-size:15px;font-weight:700;">📦 Importar de Mercadorias</div>
+          <input id="est-merc-q" type="search" autocomplete="off" placeholder="Buscar produto ou código..."
+            style="width:100%;padding:8px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;outline:none;"/>
+          <div id="est-merc-lista" style="display:flex;flex-direction:column;gap:6px;max-height:52vh;overflow-y:auto;"></div>
+          <button id="est-merc-close" class="btn btn-ghost" style="width:100%;margin-top:4px;">Fechar</button>
         </div>`;
-        mo.querySelector("#est-merc-q")?.addEventListener("input",e=>{q=e.target.value;renderModal();});
-        mo.querySelector("#est-merc-close")?.addEventListener("click",()=>mo.remove());
-        mo.querySelectorAll("[data-merc-id]").forEach(btn=>{
+      document.body.appendChild(mo);
+
+      const inp=mo.querySelector("#est-merc-q");
+      const lista=mo.querySelector("#est-merc-lista");
+
+      function renderLista(){
+        const q=(inp?.value||"").toLowerCase().trim();
+        const itensAtuais=itensPorTabela[tabelaAtiva]||[];
+        const filtradas=q
+          ?mercadorias.filter(m=>String(m.nome||"").toLowerCase().includes(q)||String(m.codigo||m.sku||"").toLowerCase().includes(q))
+          :mercadorias;
+
+        if(!filtradas.length){
+          lista.innerHTML=`<div style="padding:16px;text-align:center;color:var(--muted);">Nenhum resultado.</div>`;
+          return;
+        }
+        lista.innerHTML=filtradas.map(m=>{
+          const jaTem=itensAtuais.some(i=>i.codigo&&String(i.codigo).toUpperCase()===String(m.codigo||m.sku||"").toUpperCase());
+          return`<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${jaTem?"opacity:.5":""}">
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.nome||"(sem nome)")}</div>
+              <div style="font-size:11px;color:var(--muted);">Cód: ${esc(m.codigo||m.sku||"—")} · R$ ${Number(m.valor_venda||m.valorVenda||0).toFixed(2)}</div>
+            </div>
+            ${jaTem
+              ?`<span style="font-size:11px;color:var(--amber);flex-shrink:0;">já importado</span>`
+              :`<button class="btn btn-primary" style="font-size:12px;padding:5px 10px;flex-shrink:0;" data-merc-id="${esc(m.id||m._id||"")}">+ Adicionar</button>`
+            }
+          </div>`;
+        }).join("");
+
+        // Bindar botões Adicionar
+        lista.querySelectorAll("[data-merc-id]").forEach(btn=>{
           btn.addEventListener("click",async()=>{
             const id=btn.getAttribute("data-merc-id");
             const m=mercadorias.find(x=>String(x.id||x._id||"")===id);
             if(!m) return;
-            await runWithUi(async()=>{
+            btn.disabled=true; btn.textContent="⏳";
+            try{
               const novo=await DB.request("/api/estoque-itens",{
                 method:"POST",
                 body:JSON.stringify({
@@ -4871,18 +4906,34 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
               });
               if(novo?.id){
                 if(!itensPorTabela[tabelaAtiva]) itensPorTabela[tabelaAtiva]=[];
-                itensPorTabela[tabelaAtiva].push({id:novo.id,produto:String(m.nome||"").toUpperCase(),codigo:String(m.codigo||m.sku||"").toUpperCase(),quantidade:Number(m.estoque||m.estoqueAtual||0),quantidade_min:Number(m.estoqueMin||0),valor_unit:Number(m.valor_venda||m.valorVenda||0),unidade:"UN",obs:"",bloqueado:0});
+                itensPorTabela[tabelaAtiva].push({
+                  id:novo.id,
+                  produto:String(m.nome||"").toUpperCase(),
+                  codigo:String(m.codigo||m.sku||"").toUpperCase(),
+                  quantidade:Number(m.estoque||m.estoqueAtual||0),
+                  quantidade_min:Number(m.estoqueMin||0),
+                  valor_unit:Number(m.valor_venda||m.valorVenda||0),
+                  unidade:"UN",obs:"",bloqueado:0
+                });
                 renderTabelaItens();
                 toast(`✅ "${m.nome}" importado.`,"success");
-                renderModal();
+                renderLista(); // só recria a lista, o input fica intacto
               }
-            },"Importando...");
+            }catch(e){
+              toast("Erro ao importar: "+(e?.message||""),"error");
+              btn.disabled=false; btn.textContent="+ Adicionar";
+            }
           });
         });
       }
-      renderModal();
-      document.body.appendChild(mo);
+
+      // Input: filtrar SEM recriar o input
+      inp?.addEventListener("input",()=>renderLista());
+      mo.querySelector("#est-merc-close")?.addEventListener("click",()=>mo.remove());
       mo.addEventListener("click",e=>{if(e.target===mo)mo.remove();});
+
+      renderLista();
+      setTimeout(()=>inp?.focus(),80);
     });
 
     // ── Exportar Excel ──────────────────────────────────────────────────────
