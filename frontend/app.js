@@ -3035,10 +3035,12 @@
         const tel=String(v.telefone||"").replace(/\D/g,"");
         const wpp=encodeURIComponent("Olá, Willyam da Cefeq.");
         const wppHref=tel.length>=10?`https://wa.me/55${tel}?text=${wpp}`:"";
+        const semEnd=!v.endereco&&!v.cidade&&(!v.lat||!String(v.lat).includes(","));
         return`<div class="list-item">
           <div class="list-item-top">
             <div><div class="list-item-title">${esc(v.nome||"")}</div>
               ${v.cidade?`<div style="font-size:12px;color:var(--muted);">📍 ${esc(v.cidade)}</div>`:""}
+              ${semEnd?`<div style="font-size:11px;color:var(--amber);margin-top:2px;">⚠️ Endereço não cadastrado — não aparece no mapa</div>`:""}
             </div>
             <div style="text-align:right;font-size:11px;color:var(--muted);">${v.data?dateFormatBR(v.data):""}</div>
           </div>
@@ -3123,6 +3125,21 @@
               </select>
             </div>
             <div class="field"><label>Observações</label><textarea id="vis-obs" rows="3" style="${inStyle}resize:vertical;text-transform:uppercase;">${esc(item?.obs||"")}</textarea></div>
+            <div class="field" style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;">
+              <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:0;">
+                <input type="checkbox" id="vis-criar-lembrete" ${item?.criar_lembrete?"checked":""} style="width:18px;height:18px;accent-color:var(--amber);cursor:pointer;flex-shrink:0;"/>
+                <div>
+                  <div style="font-size:13px;font-weight:600;">🔔 Criar lembrete para entrar em contato</div>
+                  <div style="font-size:11px;color:var(--muted);margin-top:2px;">Adiciona automaticamente nos Lembretes</div>
+                </div>
+              </label>
+              <div id="vis-lembrete-extra" style="display:${item?.criar_lembrete?"block":"none"};margin-top:12px;display:flex;flex-direction:column;gap:8px;">
+                <input id="vis-lem-data" type="date" value="${esc(item?.lembrete_data||"")}"
+                  style="${inStyle}margin:0;" placeholder="Data do lembrete"/>
+                <input id="vis-lem-obs" type="text" value="${esc(item?.lembrete_obs||"")}"
+                  style="${inStyle}margin:0;text-transform:uppercase;" placeholder="Observação do lembrete (opcional)"/>
+              </div>
+            </div>
           </div>
           <div class="form-actions">
             <button type="button" id="vis-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Registrar"}</button>
@@ -3150,6 +3167,29 @@
           btn.textContent="📍 Localização"; btn.disabled=false;
         },err=>{toast(err.message,"error");btn.textContent="📍 Localização";btn.disabled=false;},{enableHighAccuracy:true,timeout:10000});
       });
+      // Toggle campos extras do lembrete
+      document.getElementById("vis-criar-lembrete")?.addEventListener("change",e=>{
+        const extra=document.getElementById("vis-lembrete-extra");
+        if(extra) extra.style.display=e.target.checked?"flex":"none";
+        // Pré-preencher data com próxima ação ou +7 dias
+        if(e.target.checked){
+          const dataInput=document.getElementById("vis-lem-data");
+          if(dataInput&&!dataInput.value){
+            const acao=document.getElementById("vis-acao")?.value||"";
+            let dias=7;
+            if(acao.includes("15")) dias=15;
+            else if(acao.includes("30")) dias=30;
+            const dt=new Date(); dt.setDate(dt.getDate()+dias);
+            dataInput.value=dt.toISOString().slice(0,10);
+          }
+          const obsLem=document.getElementById("vis-lem-obs");
+          if(obsLem&&!obsLem.value){
+            const nome=document.getElementById("vis-nome")?.value||"";
+            obsLem.value=nome?"ENTRAR EM CONTATO COM "+nome:"ENTRAR EM CONTATO";
+          }
+        }
+      });
+
       document.getElementById("vis-tel")?.addEventListener("input",e=>{
         let v=e.target.value.replace(/\D/g,"").slice(0,11);
         if(v.length<=10) v=v.replace(/^(\d{2})(\d{4})(\d{0,4})$/,"($1) $2-$3");
@@ -3178,6 +3218,26 @@
           } else {
             const nova=await DB.request("/api/visitas",{method:"POST",body:JSON.stringify(payload)});
             visitas=[{...payload,...(nova||{})}, ...visitas];
+          }
+          // Criar lembrete se marcado
+          const criarLem=document.getElementById("vis-criar-lembrete")?.checked;
+          if(criarLem){
+            const lemData=document.getElementById("vis-lem-data")?.value||new Date(Date.now()+7*86400000).toISOString().slice(0,10);
+            const lemObs=document.getElementById("vis-lem-obs")?.value?.toUpperCase()||("ENTRAR EM CONTATO COM "+(payload.nome||""));
+            try{
+              const lem={
+                id:"LEM-"+Date.now()+"-"+Math.random().toString(36).slice(2,5),
+                titulo:lemObs,
+                descricao:"Criado automaticamente da visita: "+(payload.nome||""),
+                data:lemData,
+                concluido:0,
+                prioridade:"ALTA"
+              };
+              await DB.request("/api/lembretes",{method:"POST",body:JSON.stringify(lem)});
+              if(!state.cache.lembretes) state.cache.lembretes=[];
+              state.cache.lembretes.unshift(lem);
+              toast(`🔔 Lembrete criado para ${dateFormatBR(lemData)}.`,"info",4000);
+            }catch(e2){console.warn("Lembrete não criado:",e2?.message);}
           }
           fw.innerHTML=""; renderLista();
           toast(`✅ Visita ${isEdit?"atualizada":"registrada"}.`,"success");
@@ -3288,59 +3348,207 @@
     }
 
     // ── Aba Mapa ──────────────────────────────────────────────────────────────
-    function renderMapa(){
+    async function renderMapa(){
       const cont=document.getElementById("sv-vis-mapa"); if(!cont) return;
-      const filtradas=getFiltradasPorPeriodo().filter(v=>v.lat&&String(v.lat).includes(","));
+      const todas=getFiltradasPorPeriodo();
+      // Visitas com lat já salva
+      const comLat=todas.filter(v=>v.lat&&String(v.lat).includes(","));
+      // Visitas sem lat mas com endereço — tentamos geocodificar
+      const semLat=todas.filter(v=>(!v.lat||!String(v.lat).includes(","))&&(v.endereco||v.cidade));
+      const semEndereco=todas.filter(v=>(!v.lat||!String(v.lat).includes(","))&&!v.endereco&&!v.cidade);
       cont.innerHTML=`
         <div class="card" style="margin-bottom:0;">
-          <div style="font-size:13px;font-weight:600;margin-bottom:8px;">
-            🗺️ Mapa de visitas — ${filtradas.length} com localização
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px;gap:8px;">
+            <div style="font-size:13px;font-weight:600;">
+              🗺️ Mapa de visitas — ${comLat.length} com GPS${semLat.length?` · 🔍 ${semLat.length} a geocodificar`:""}${semEndereco.length?` · ⚠️ ${semEndereco.length} sem endereço`:""}
+            </div>
+            <button id="vis-mapa-share" class="btn btn-secondary" style="font-size:12px;padding:6px 10px;flex-shrink:0;">🔗 Compartilhar</button>
           </div>
-          ${!filtradas.length?`<div style="padding:20px;text-align:center;color:var(--muted);">Nenhuma visita com geolocalização no período.<br><span style="font-size:11px;">Use o botão 📍 Localização ao registrar a visita.</span></div>`:`
-          <div id="sv-vis-leaflet" style="height:380px;border-radius:12px;overflow:hidden;"></div>`}
+          ${semLat.length?`<div id="sv-vis-geo-progress" style="font-size:11px;color:var(--amber);margin-bottom:6px;">⏳ Buscando coordenadas para visitas com endereço...</div>`:""}
+          <div id="sv-vis-leaflet" style="height:400px;border-radius:12px;overflow:hidden;background:var(--bg2);display:flex;align-items:center;justify-content:center;">
+            <span style="color:var(--muted);font-size:13px;">Carregando mapa...</span>
+          </div>
+          ${semEndereco.length?`<div style="font-size:11px;color:var(--muted);margin-top:6px;">⚠️ ${semEndereco.length} visita(s) sem endereço cadastrado não aparecem no mapa.</div>`:""}
         </div>`;
-      if(!filtradas.length) return;
-      function initLeaflet(){
+
+      // Cache de geocoding em memória
+      if(!state._visGeoCache) state._visGeoCache={};
+      const geoCache=state._visGeoCache;
+
+      async function geocodeVisita(v){
+        const key=String(v.id||v._id);
+        if(geoCache[key]) return geoCache[key];
+        const partes=[v.endereco,v.cidade,"Brasil"].filter(Boolean).join(", ");
+        try{
+          const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(partes)}`,{headers:{"User-Agent":"supervenda-app"}});
+          const j=await r.json();
+          if(j&&j[0]){const coord={lat:parseFloat(j[0].lat),lng:parseFloat(j[0].lon)};geoCache[key]=coord;return coord;}
+        }catch{}
+        return null;
+      }
+
+      function initLeaflet(filtradas){
+        const leafletDiv=document.getElementById("sv-vis-leaflet");
+        if(!leafletDiv) return;
         const L=window.L;
-        const map=L.map("sv-vis-leaflet");
+        leafletDiv.innerHTML="";
+        if(!filtradas.length){
+          leafletDiv.innerHTML=`<div style="padding:20px;text-align:center;color:var(--muted);">Nenhuma visita com localização no período.<br><span style="font-size:11px;">Use o botão 📍 ao registrar a visita ou cadastre o endereço.</span></div>`;
+          return;
+        }
+        const map=L.map(leafletDiv);
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
-        // Agrupar por cidade para heat-map visual
         const cidadeCount={};
-        filtradas.forEach(v=>{
-          const c=v.cidade||"Sem cidade";
-          cidadeCount[c]=(cidadeCount[c]||0)+1;
-        });
+        filtradas.forEach(v=>{ const c=v.cidade||"Sem cidade"; cidadeCount[c]=(cidadeCount[c]||0)+1; });
         const maxCount=Math.max(...Object.values(cidadeCount));
         const bounds=[];
         filtradas.forEach(v=>{
-          const[lat,lng]=String(v.lat).split(",").map(Number);
-          if(isNaN(lat)||isNaN(lng)) return;
+          if(!v._coord) return;
+          const{lat,lng}=v._coord;
           bounds.push([lat,lng]);
           const count=cidadeCount[v.cidade||"Sem cidade"]||1;
-          const intensity=Math.min(1,count/maxCount);
-          const radius=8+intensity*16;
+          const radius=8+Math.min(1,count/maxCount)*16;
           const color=count>=5?"#ef4444":count>=3?"#f59e0b":"#3b82f6";
           L.circleMarker([lat,lng],{radius,color,fillColor:color,fillOpacity:0.7,weight:2})
             .addTo(map)
             .bindPopup(`<strong>${esc(v.nome||"")}</strong><br>${esc(v.cidade||"")}<br>${v.data?dateFormatBR(v.data):""}<br>${v.resultado?`<span style="color:${color};">${esc(v.resultado)}</span>`:""}`);
         });
         if(bounds.length) map.fitBounds(bounds,{padding:[30,30]});
-        // Legenda
         const leg=L.control({position:"bottomright"});
         leg.onAdd=()=>{const d=L.DomUtil.create("div","");d.style.cssText="background:rgba(255,255,255,.9);padding:8px;border-radius:8px;font-size:11px;";d.innerHTML=`<strong>Visitas por área</strong><br><span style="color:#3b82f6;">● 1-2</span>  <span style="color:#f59e0b;">● 3-4</span>  <span style="color:#ef4444;">● 5+</span>`;return d;};
         leg.addTo(map);
       }
-      if(window.L){ initLeaflet(); return; }
-      const link=document.createElement("link");
-      link.rel="stylesheet"; link.href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
-      document.head.appendChild(link);
-      const s=document.createElement("script");
-      s.src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
-      s.onload=()=>setTimeout(initLeaflet,100);
-      document.head.appendChild(s);
+
+      async function carregarMapa(){
+        // Mapear coord de visitas com lat
+        const todasComCoord=[...comLat.map(v=>{const[lat,lng]=String(v.lat).split(",").map(Number);return{...v,_coord:(!isNaN(lat)&&!isNaN(lng))?{lat,lng}:null};})]
+          .filter(v=>v._coord);
+
+        // Geocodificar visitas sem lat em paralelo (limit 3 simultâneas)
+        const batch=semLat.slice(0,20); // max 20 para não abusar do nominatim
+        for(let i=0;i<batch.length;i+=3){
+          const chunk=batch.slice(i,i+3);
+          await Promise.all(chunk.map(async v=>{
+            const coord=await geocodeVisita(v);
+            if(coord) todasComCoord.push({...v,_coord:coord});
+          }));
+        }
+
+        const prog=document.getElementById("sv-vis-geo-progress");
+        if(prog) prog.remove();
+
+        if(window.L){ initLeaflet(todasComCoord); return; }
+        const link=document.createElement("link");
+        link.rel="stylesheet"; link.href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+        document.head.appendChild(link);
+        const s=document.createElement("script");
+        s.src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+        s.onload=()=>setTimeout(()=>initLeaflet(todasComCoord),100);
+        document.head.appendChild(s);
+      }
+      carregarMapa();
+
+      // ── Botão Compartilhar mapa ──────────────────────────────────────────────
+      document.getElementById("vis-mapa-share")?.addEventListener("click",async()=>{
+        // Coletar todas as visitas com coordenada já processadas (esperar o geo terminar)
+        toast("⏳ Gerando mapa para compartilhar...","info",2000);
+        await new Promise(r=>setTimeout(r,800)); // espera geocoding em progresso
+
+        // Reconstruir lista de pontos a partir do geoCache + lat existente
+        const pontos=[];
+        const todas2=getFiltradasPorPeriodo();
+        todas2.forEach(v=>{
+          let lat,lng;
+          if(v.lat&&String(v.lat).includes(",")){
+            [lat,lng]=String(v.lat).split(",").map(Number);
+          } else if(geoCache[String(v.id||v._id)]){
+            ({lat,lng}=geoCache[String(v.id||v._id)]);
+          }
+          if(lat&&lng&&!isNaN(lat)&&!isNaN(lng)){
+            pontos.push({lat,lng,nome:v.nome||"",cidade:v.cidade||"",data:v.data||"",resultado:v.resultado||""});
+          }
+        });
+
+        if(!pontos.length){toast("Nenhum ponto com localização para compartilhar.","warning");return;}
+
+        const pontosJson=JSON.stringify(pontos);
+        const html=`<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Mapa de Visitas — CEFEQ Suprimentos</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:Arial,sans-serif;background:#0f1117;color:#fff;}
+    #header{padding:14px 18px;background:#1a2744;display:flex;align-items:center;justify-content:space-between;}
+    #header h1{font-size:15px;font-weight:700;}
+    #header small{font-size:11px;color:#94a3b8;}
+    #map{height:calc(100vh - 54px);}
+  </style>
+</head>
+<body>
+  <div id="header">
+    <div>
+      <h1>🗺️ Mapa de Visitas — CEFEQ Suprimentos Industriais</h1>
+      <small>Gerado em ${new Date().toLocaleDateString("pt-BR")} · ${pontos.length} visita(s)</small>
+    </div>
+  </div>
+  <div id="map"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"><\/script>
+  <script>
+    const pontos=${pontosJson};
+    const map=L.map("map");
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
+    const bounds=[];
+    const cores={INTERESSADO:"#22c55e","PEDIDO REALIZADO":"#3b82f6","EM NEGOCIAÇÃO":"#f59e0b","NÃO TINHA INTERESSE":"#ef4444","AGUARDANDO RETORNO":"#a78bfa","VISITA AGENDADA":"#06b6d4"};
+    pontos.forEach(p=>{
+      const cor=cores[p.resultado]||"#64748b";
+      bounds.push([p.lat,p.lng]);
+      L.circleMarker([p.lat,p.lng],{radius:10,color:cor,fillColor:cor,fillOpacity:0.8,weight:2})
+        .addTo(map)
+        .bindPopup("<strong>"+p.nome+"</strong><br>"+p.cidade+"<br>"+(p.data||"")+"<br><span style='color:"+cor+";font-weight:600;'>"+p.resultado+"</span>");
+    });
+    if(bounds.length) map.fitBounds(bounds,{padding:[30,30]});
+    const leg=L.control({position:"bottomright"});
+    leg.onAdd=()=>{
+      const d=L.DomUtil.create("div","");
+      d.style.cssText="background:rgba(255,255,255,.95);padding:10px;border-radius:8px;font-size:11px;line-height:1.8;";
+      d.innerHTML="<strong>Legenda</strong><br>"+Object.entries(cores).map(([k,c])=>"<span style='color:"+c+";'>&#9679;</span> "+k).join("<br>");
+      return d;
+    };
+    leg.addTo(map);
+  <\/script>
+</body>
+</html>`;
+
+        // Tentar Web Share API primeiro (mobile), fallback para download
+        const blob=new Blob([html],{type:"text/html;charset=utf-8"});
+        if(navigator.share&&navigator.canShare&&navigator.canShare({files:[new File([blob],"mapa-visitas.html",{type:"text/html"})]})){
+          try{
+            await navigator.share({
+              files:[new File([blob],"mapa-visitas.html",{type:"text/html"})],
+              title:"Mapa de Visitas — CEFEQ",
+              text:`${pontos.length} visitas mapeadas`
+            });
+            return;
+          }catch(e){if(e.name==="AbortError") return;}
+        }
+        // Fallback: download do arquivo HTML
+        const url=URL.createObjectURL(blob);
+        const a=Object.assign(document.createElement("a"),{
+          href:url,
+          download:`mapa-visitas-cefeq-${new Date().toISOString().slice(0,10)}.html`
+        });
+        a.click();
+        setTimeout(()=>URL.revokeObjectURL(url),2000);
+        toast("📥 Mapa baixado! Abra o arquivo HTML em qualquer navegador.","success",5000);
+      });
     }
 
     // ── Aba Gráficos ──────────────────────────────────────────────────────────
+    if(!state._visGraficoTipo) state._visGraficoTipo="linha";
     function renderGraficos(){
       const cont=document.getElementById("sv-vis-graficos"); if(!cont) return;
       const filtradas=getFiltradasPorPeriodo();
@@ -3348,6 +3556,7 @@
         cont.innerHTML=`<div class="card"><div style="padding:24px;text-align:center;color:var(--muted);">Nenhum dado no período.</div></div>`;
         return;
       }
+      const tipoAtual=state._visGraficoTipo||"linha";
       // Agrupamentos
       const porResultado={};
       filtradas.forEach(v=>{const k=v.resultado||"Sem registro";porResultado[k]=(porResultado[k]||0)+1;});
@@ -3404,25 +3613,116 @@
           </div>
         </div>`;
       }
-      // Gráfico de linha por data
+      // Seletor de tipo de gráfico
       const datasOrdenadas=Object.entries(porData).sort((a,b)=>a[0].localeCompare(b[0])).slice(-30);
       const maxD=Math.max(...datasOrdenadas.map(x=>x[1]),1);
-      const lineChart=datasOrdenadas.length>1?`<div class="card" style="margin-bottom:10px;">
-        <div style="font-size:13px;font-weight:600;margin-bottom:12px;">📈 Visitas por dia</div>
-        <svg viewBox="0 0 300 80" style="width:100%;height:auto;">
-          <polyline fill="none" stroke="#4488ff" stroke-width="1.5"
-            points="${datasOrdenadas.map(([d,v],i)=>`${i*(300/(datasOrdenadas.length-1))},${80-v/maxD*70}`).join(" ")}"/>
-          ${datasOrdenadas.map(([d,v],i)=>`<circle cx="${i*(300/(datasOrdenadas.length-1))}" cy="${80-v/maxD*70}" r="3" fill="#4488ff">
-            <title>${dateFormatBR(d)}: ${v} visita${v!==1?"s":""}</title>
-          </circle>`).join("")}
-          <line x1="0" y1="78" x2="300" y2="78" stroke="var(--border)" stroke-width="0.5"/>
-        </svg>
-        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:4px;">
-          <span>${dateFormatBR(datasOrdenadas[0]?.[0])}</span>
-          <span>${dateFormatBR(datasOrdenadas[datasOrdenadas.length-1]?.[0])}</span>
+
+      function buildLineChart(){
+        if(datasOrdenadas.length<2) return "";
+        return`<div class="card" style="margin-bottom:10px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:12px;">📈 Visitas por dia — Linha</div>
+          <svg viewBox="0 0 300 80" style="width:100%;height:auto;">
+            <polyline fill="none" stroke="#4488ff" stroke-width="1.5"
+              points="${datasOrdenadas.map(([d,v],i)=>`${i*(300/(datasOrdenadas.length-1))},${80-v/maxD*70}`).join(" ")}"/>
+            ${datasOrdenadas.map(([d,v],i)=>`<circle cx="${i*(300/(datasOrdenadas.length-1))}" cy="${80-v/maxD*70}" r="3" fill="#4488ff">
+              <title>${dateFormatBR(d)}: ${v} visita${v!==1?"s":""}</title>
+            </circle>`).join("")}
+            <line x1="0" y1="78" x2="300" y2="78" stroke="var(--border)" stroke-width="0.5"/>
+          </svg>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:4px;">
+            <span>${dateFormatBR(datasOrdenadas[0]?.[0])}</span>
+            <span>${dateFormatBR(datasOrdenadas[datasOrdenadas.length-1]?.[0])}</span>
+          </div>
+        </div>`;
+      }
+
+      function buildBarrasHoriz(){
+        const max=Math.max(...Object.values(porResultado),1);
+        const entries=Object.entries(porResultado).sort((a,b)=>b[1]-a[1]);
+        return`<div class="card" style="margin-bottom:10px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:12px;">📊 Por resultado — Barras horizontais</div>
+          ${entries.map(([k,v])=>`
+            <div style="margin-bottom:8px;">
+              <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;">
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;margin-right:8px;">${esc(k)}</span>
+                <span style="font-weight:700;">${v}</span>
+              </div>
+              <div style="background:var(--bg3);border-radius:4px;height:10px;overflow:hidden;">
+                <div style="background:#4488ff;height:100%;border-radius:4px;width:${Math.round(v/max*100)}%;transition:width .5s;"></div>
+              </div>
+            </div>`).join("")}
+        </div>`;
+      }
+
+      function buildColunasVert(){
+        const entries=Object.entries(porData).sort((a,b)=>a[0].localeCompare(b[0])).slice(-14);
+        const maxV=Math.max(...entries.map(x=>x[1]),1);
+        const w=Math.max(20,Math.floor(280/Math.max(entries.length,1)));
+        return`<div class="card" style="margin-bottom:10px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:12px;">📊 Visitas por dia — Colunas</div>
+          <div style="overflow-x:auto;">
+            <svg viewBox="0 0 ${Math.max(300,entries.length*w+20)} 100" style="width:100%;min-width:280px;height:auto;">
+              ${entries.map(([d,v],i)=>{
+                const h=Math.round(v/maxV*70);
+                const x=i*w+10; const y=80-h;
+                return`<g>
+                  <rect x="${x}" y="${y}" width="${w-4}" height="${h}" rx="3" fill="#4488ff" opacity=".85"/>
+                  <text x="${x+(w-4)/2}" y="${y-3}" text-anchor="middle" font-size="8" fill="var(--muted)">${v}</text>
+                  <text x="${x+(w-4)/2}" y="94" text-anchor="middle" font-size="7" fill="var(--muted)">${d.slice(5)}</text>
+                </g>`;
+              }).join("")}
+              <line x1="0" y1="80" x2="${Math.max(300,entries.length*w+20)}" y2="80" stroke="var(--border)" stroke-width="0.5"/>
+            </svg>
+          </div>
+        </div>`;
+      }
+
+      const seletor=`<div class="card" style="margin-bottom:8px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:10px;">📊 Tipo de visualização</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${[["linha","📈 Linha"],["colunas","📊 Colunas"],["barras","⬜ Barras"],["pizza","🥧 Pizza"],["resumo","📋 Resumo"]].map(([t,l])=>
+            `<button class="btn ${tipoAtual===t?"btn-primary":"btn-secondary"}" data-gtipo="${t}" style="font-size:12px;padding:6px 10px;">${l}</button>`
+          ).join("")}
+          <button id="vis-print-grafico" class="btn btn-secondary" style="font-size:12px;padding:6px 10px;margin-left:auto;">🖨️ Imprimir</button>
         </div>
-      </div>`:"";
-      cont.innerHTML=lineChart+pieChart("🎯 Por resultado",porResultado)+barChart("🏙️ Por cidade",porCidade,CORES);
+      </div>`;
+
+      let graficoContent="";
+      if(tipoAtual==="linha") graficoContent=buildLineChart()+pieChart("🎯 Por resultado",porResultado)+barChart("🏙️ Por cidade",porCidade,CORES);
+      else if(tipoAtual==="colunas") graficoContent=buildColunasVert()+pieChart("🎯 Por resultado",porResultado);
+      else if(tipoAtual==="barras") graficoContent=buildBarrasHoriz()+barChart("🏙️ Por cidade",porCidade,CORES);
+      else if(tipoAtual==="pizza") graficoContent=pieChart("🎯 Por resultado",porResultado)+pieChart("🏙️ Por cidade",porCidade);
+      else graficoContent=barChart("🎯 Por resultado",porResultado,CORES)+barChart("🏙️ Por cidade",porCidade,CORES);
+
+      cont.innerHTML=seletor+graficoContent;
+
+      // Botões tipo
+      cont.querySelectorAll("[data-gtipo]").forEach(btn=>{
+        btn.addEventListener("click",()=>{
+          state._visGraficoTipo=btn.getAttribute("data-gtipo");
+          renderGraficos();
+        });
+      });
+
+      // Imprimir gráfico
+      document.getElementById("vis-print-grafico")?.addEventListener("click",()=>{
+        const win=window.open("","_blank","width=900,height=700");
+        if(!win){toast("Permita popups.","warning");return;}
+        const html=cont.innerHTML;
+        win.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/><title>Gráficos Visitas</title>
+          <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:Arial,sans-serif;font-size:12px;padding:20px;color:#222;}
+          .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:12px;}
+          .no-print{margin-bottom:12px;display:flex;gap:8px;}
+          @media print{.no-print{display:none;}[data-gtipo],[id="vis-print-grafico"]{display:none;}}</style></head><body>
+          <div class="no-print">
+            <button onclick="window.print()" style="padding:7px 14px;background:#1a2744;color:#fff;border:none;border-radius:6px;cursor:pointer;">🖨️ Imprimir</button>
+            <button onclick="window.close()" style="padding:7px 14px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;cursor:pointer;">✕ Fechar</button>
+          </div>
+          <h2 style="margin-bottom:14px;font-size:15px;color:#1a2744;">📊 Gráficos de Visitas — CEFEQ Suprimentos</h2>
+          ${html}
+        </body></html>`);
+        win.document.close();
+      });
     }
 
     // ── Render principal ──────────────────────────────────────────────────────
@@ -3837,10 +4137,55 @@
 
   // ─── Vendas Diárias ───────────────────────────────────────────────────────────
   async function renderVendas(root){
-    const KEY="sv_vendas_diarias";
-    const lerVendas=()=>{try{return JSON.parse(localStorage.getItem(KEY)||"[]");}catch{return[];}};
-    const gravarVendas=v=>{try{localStorage.setItem(KEY,JSON.stringify(v));}catch{}};
-    let vendas=lerVendas();
+    // Vendas agora salvas no Cloudflare D1 via /api/vendas
+    let vendas=[];
+    let _carregado=false;
+
+    async function carregarVendas(){
+      try{
+        const rows=safeArray(await DB.request("/api/vendas",{method:"GET"}));
+        vendas=rows;
+        _carregado=true;
+        // Migração única: se tinha dados no localStorage, sobe para o D1
+        const KEY_LOCAL="sv_vendas_diarias";
+        const LEGADAS=["sv_vendas","vendas_diarias","supervenda_vendas",KEY_LOCAL];
+        for(const k of LEGADAS){
+          try{
+            const local=JSON.parse(localStorage.getItem(k)||"[]");
+            if(!local.length) continue;
+            // Verificar se já foram migrados (ids iguais)
+            const idsRemoto=new Set(vendas.map(v=>String(v.id||v._id)));
+            const novos=local.filter(v=>!idsRemoto.has(String(v._id||v.id)));
+            if(!novos.length){localStorage.removeItem(k);continue;}
+            for(const v of novos){
+              try{await DB.request("/api/vendas",{method:"POST",body:JSON.stringify(v)});}catch{}
+            }
+            localStorage.removeItem(k);
+            toast(`✅ ${novos.length} lançamento(s) migrados para a nuvem.`,"success",4000);
+            // Recarregar
+            const fresh=safeArray(await DB.request("/api/vendas",{method:"GET"}));
+            vendas=fresh;
+          }catch{}
+        }
+      }catch(e){
+        // Fallback offline: usar localStorage se API falhar
+        try{vendas=JSON.parse(localStorage.getItem("sv_vendas_diarias")||"[]");}catch{vendas=[];}
+        console.warn("Vendas offline:",e?.message);
+      }
+    }
+
+    async function salvarVenda(payload,isEdit){
+      const method=isEdit?"PUT":"POST";
+      const url=isEdit?`/api/vendas/${encodeURIComponent(payload.id||payload._id)}`:"/api/vendas";
+      const salvo=await DB.request(url,{method,body:JSON.stringify(payload)});
+      return salvo;
+    }
+
+    async function deletarVenda(id){
+      await DB.request(`/api/vendas/${encodeURIComponent(id)}`,{method:"DELETE"});
+    }
+
+    await runWithUi(carregarVendas,"Carregando vendas...");
 
     if(!state._venFiltro) state._venFiltro="tudo";
 
@@ -3896,23 +4241,28 @@
             </div>
           </div>
           <div class="list-item-actions">
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-ven-edit="${esc(v._id)}">✏️ Editar</button>
-            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-ven-del="${esc(v._id)}">🗑️</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;" data-ven-edit="${esc(v.id||v._id)}">✏️ Editar</button>
+            <button class="btn btn-secondary" style="font-size:12px;padding:6px 12px;color:var(--red);" data-ven-del="${esc(v.id||v._id)}">🗑️</button>
           </div>
         </div>`).join("");
 
       lista.querySelectorAll("[data-ven-edit]").forEach(btn=>{
         btn.addEventListener("click",()=>{
-          const v=vendas.find(x=>x._id===btn.getAttribute("data-ven-edit"));
+          const eid=btn.getAttribute("data-ven-edit");
+          const v=vendas.find(x=>(x.id||x._id)===eid);
           if(v) renderFormVenda(v);
         });
       });
       lista.querySelectorAll("[data-ven-del]").forEach(btn=>{
-        btn.addEventListener("click",()=>{
+        btn.addEventListener("click",async()=>{
           if(!confirm("Excluir este lançamento?")) return;
-          vendas=vendas.filter(x=>x._id!==btn.getAttribute("data-ven-del"));
-          gravarVendas(vendas); renderLista();
-          toast("Lançamento excluído.","info");
+          const delId=btn.getAttribute("data-ven-del");
+          await runWithUi(async()=>{
+            await deletarVenda(delId);
+            vendas=vendas.filter(x=>(x.id||x._id)!==delId);
+            renderLista();
+            toast("Lançamento excluído.","info");
+          },"Excluindo...");
         });
       });
     }
@@ -3941,8 +4291,18 @@
                 </label>
               </div>
             </div>
+            <div class="field" style="position:relative;">
+              <label style="display:flex;align-items:center;justify-content:space-between;">
+                Produto (opcional)
+                <span style="font-size:11px;color:var(--muted);">Busca para preencher valor</span>
+              </label>
+              <input id="ven-prod-busca" type="search" autocomplete="off" placeholder="Digite nome ou código do produto..."
+                value="${esc(item?.produto_nome||"")}"
+                style="${inStyle}"/>
+              <div id="ven-prod-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:200;background:var(--bg);border:1px solid var(--border-hi);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.3);max-height:220px;overflow-y:auto;"></div>
+            </div>
             <div class="field"><label>Valor (R$) *</label><input id="ven-valor" type="text" inputmode="decimal" value="${esc(item?.valor?String(item.valor).replace(".",","):"")}" placeholder="0,00" style="${inStyle}text-align:right;"/></div>
-            <div class="field"><label>Observação</label><input id="ven-obs" type="text" value="${esc(item?.obs||"")}" placeholder="Descrição opcional..." style="${inStyle}"/></div>
+            <div class="field"><label>Observação</label><input id="ven-obs" type="text" value="${esc(item?.obs||item?.produto_nome||"")}" placeholder="Descrição opcional..." style="${inStyle}"/></div>
           </div>
           <div class="form-actions">
             <button type="button" id="ven-salvar" class="btn btn-primary" style="width:auto;">💾 ${isEdit?"Salvar":"Lançar"}</button>
@@ -3953,27 +4313,106 @@
       document.getElementById("ven-close")?.addEventListener("click",()=>{fw.innerHTML="";});
       document.getElementById("ven-cancel")?.addEventListener("click",()=>{fw.innerHTML="";});
 
-      // Highlight dos radio ao mudar
-      fw.querySelectorAll("[name='ven-tipo']").forEach(r=>{
-        r.addEventListener("change",()=>{
-          fw.querySelectorAll("[name='ven-tipo']").forEach(x=>{
-            x.closest("label").style.borderColor=x.checked?(x.value==="LOJA"?"var(--blue)":"var(--amber)"):"var(--border)";
-          });
+      // Highlight dos radio ao mudar — usar click no label para garantir atualização
+      function atualizarBordasTipo(){
+        fw.querySelectorAll("[name='ven-tipo']").forEach(x=>{
+          x.closest("label").style.borderColor=x.checked?(x.value==="LOJA"?"var(--blue)":"var(--amber)"):"var(--border)";
         });
+      }
+      fw.querySelectorAll("[name='ven-tipo']").forEach(r=>{
+        r.addEventListener("change",atualizarBordasTipo);
       });
+      fw.querySelectorAll("label:has([name='ven-tipo'])").forEach(lbl=>{
+        lbl.addEventListener("click",()=>setTimeout(atualizarBordasTipo,10));
+      });
+      // Aplicar estado inicial correto
+      atualizarBordasTipo();
 
-      document.getElementById("ven-salvar")?.addEventListener("click",()=>{
+      // ── Busca de produto para preencher valor automaticamente ──────────────
+      (()=>{
+        const inp=document.getElementById("ven-prod-busca");
+        const dd=document.getElementById("ven-prod-dropdown");
+        if(!inp||!dd) return;
+        const mercs=safeArray(state.cache.mercadorias);
+        let _ddAberto=false;
+
+        function fecharDd(){ dd.style.display="none"; _ddAberto=false; }
+        function abrirDd(){ dd.style.display="block"; _ddAberto=true; }
+
+        function renderDd(q){
+          const q2=q.trim().toLowerCase();
+          const lista=q2
+            ?mercs.filter(m=>String(m.nome||"").toLowerCase().includes(q2)||String(m.codigo||m.sku||"").toLowerCase().includes(q2))
+            :mercs.slice(0,20);
+          if(!lista.length){
+            dd.innerHTML=`<div style="padding:12px;text-align:center;color:var(--muted);font-size:13px;">${q2?"Nenhum produto encontrado.":"Nenhuma mercadoria cadastrada."}</div>`;
+            abrirDd(); return;
+          }
+          dd.innerHTML=lista.map(m=>`
+            <div class="ven-prod-item" data-nome="${esc(m.nome||"")}" data-valor="${Number(m.valor_venda||m.valorVenda||0).toFixed(2)}"
+              style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px;"
+              onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background=''">
+              <div style="overflow:hidden;">
+                <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.nome||"")}</div>
+                <div style="font-size:11px;color:var(--muted);">Cód: ${esc(m.codigo||m.sku||"—")}</div>
+              </div>
+              <div style="font-size:13px;font-weight:700;color:var(--green);flex-shrink:0;">R$ ${Number(m.valor_venda||m.valorVenda||0).toFixed(2)}</div>
+            </div>`).join("");
+          abrirDd();
+          dd.querySelectorAll(".ven-prod-item").forEach(el=>{
+            el.addEventListener("mousedown",e=>{
+              // mousedown para evitar que o blur do input feche antes do click
+              e.preventDefault();
+              const nome=el.getAttribute("data-nome");
+              const valor=el.getAttribute("data-valor");
+              inp.value=nome;
+              const valInput=document.getElementById("ven-valor");
+              if(valInput&&(!valInput.value||valInput.value==="0,00"||valInput.value==="")){
+                valInput.value=String(valor).replace(".",",");
+              }
+              const obsInput=document.getElementById("ven-obs");
+              if(obsInput&&!obsInput.value) obsInput.value=nome;
+              fecharDd();
+            });
+          });
+        }
+
+        inp.addEventListener("input",e=>{
+          renderDd(e.target.value);
+        });
+        inp.addEventListener("focus",()=>{
+          renderDd(inp.value);
+        });
+        inp.addEventListener("blur",()=>{
+          // Pequeno delay para deixar o mousedown do item processar primeiro
+          setTimeout(fecharDd, 200);
+        });
+        // Fechar ao clicar fora
+        document.addEventListener("click",e=>{
+          if(_ddAberto&&!inp.contains(e.target)&&!dd.contains(e.target)) fecharDd();
+        },{once:false,capture:false});
+        if(mercs.length===0) inp.placeholder="(mercadorias não carregadas)";
+      })();
+
+      document.getElementById("ven-salvar")?.addEventListener("click",async()=>{
         const data=document.getElementById("ven-data")?.value;
         const tipo=fw.querySelector("[name='ven-tipo']:checked")?.value||"LOJA";
         const valor=Number(String(document.getElementById("ven-valor")?.value||"0").replace(",",".").replace(/[^\d.]/g,""))||0;
         const obs=String(document.getElementById("ven-obs")?.value||"").trim();
         if(!data){toast("Informe a data.","warning");return;}
         if(!valor){toast("Informe o valor.","warning");return;}
-        const novo={_id:item?._id||("VD-"+Date.now()),data,tipo,valor,obs};
-        if(isEdit) vendas=vendas.map(x=>x._id===item._id?novo:x);
-        else vendas.unshift(novo);
-        gravarVendas(vendas); fw.innerHTML=""; renderLista();
-        toast(`✅ Lançamento ${isEdit?"atualizado":"salvo"}.`,"success");
+        const id=item?.id||item?._id||("VD-"+Date.now());
+        const novo={id,data,tipo,valor,obs};
+        await runWithUi(async()=>{
+          const salvo=await salvarVenda(novo,isEdit);
+          if(isEdit){
+            vendas=vendas.map(x=>(x.id||x._id)===id?{...x,...(salvo||novo)}:x);
+          } else {
+            vendas.unshift(salvo||novo);
+          }
+          fw.innerHTML=""; renderLista();
+          toast(`✅ Lançamento ${isEdit?"atualizado":"salvo"}.`,"success");
+        },isEdit?"Salvando...":"Lançando...");
       });
     }
 
@@ -4061,7 +4500,7 @@
                 <th style="padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Código</th>
                 <th style="padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Produto</th>
                 <th style="padding:10px 12px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Qtd</th>
-                <th style="padding:10px 12px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Mín</th>
+                <th style="padding:10px 12px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Val.Unit</th>
                 <th style="padding:10px 12px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Un</th>
                 <th style="padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Obs</th>
                 <th style="padding:10px 12px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:11px;text-transform:uppercase;">Status</th>
@@ -4086,7 +4525,7 @@
                     <span class="edit-cell edit-number" data-field="quantidade" data-id="${esc(item.id)}" style="font-size:15px;font-weight:700;color:${bloq?"var(--red)":baixoEst?"var(--amber)":"var(--green)"};">${Number(item.quantidade||0)}</span>
                   </td>
                   <td style="padding:10px 12px;text-align:center;">
-                    <span class="edit-cell edit-number" data-field="quantidade_min" data-id="${esc(item.id)}" style="font-size:12px;color:var(--muted);">${Number(item.quantidade_min||0)}</span>
+                    <span class="edit-cell edit-number" data-field="valor_unit" data-id="${esc(item.id)}" style="font-size:12px;color:var(--muted);">${Number(item.valor_unit||0).toFixed(2)}</span>
                   </td>
                   <td style="padding:10px 12px;text-align:center;">
                     <span class="edit-cell" data-field="unidade" data-id="${esc(item.id)}" style="font-size:12px;color:var(--muted);">${esc(item.unidade||"UN")}</span>
@@ -4219,8 +4658,13 @@
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
           <div class="card-title">📦 Controle de Estoque</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            ${isAdmin?`<button id="est-nova-tabela" class="btn btn-secondary" style="font-size:12px;">➕ Nova tabela</button>`:""}
+            ${isAdmin?`<button id="est-nova-tabela" class="btn btn-secondary" style="font-size:12px;">➕ Nova tabela</button><button id="est-del-tabela" class="btn btn-secondary" style="font-size:12px;color:var(--red);">🗑️ Deletar tabela</button>`:""}
             <button id="est-add-item" class="btn btn-primary" style="width:auto;font-size:13px;">+ Adicionar item</button>
+            <button id="est-import-merc" class="btn btn-secondary" style="font-size:12px;" title="Importar item de Mercadorias">📦 De Mercadoria</button>
+            <button id="est-import-excel" class="btn btn-secondary" style="font-size:12px;" title="Importar Excel">📥 Excel</button>
+            <button id="est-export-excel" class="btn btn-secondary" style="font-size:12px;" title="Exportar Excel">📤 Excel</button>
+            <button id="est-print-pdf" class="btn btn-secondary" style="font-size:12px;" title="Imprimir PDF">🖨️ PDF</button>
+            <input type="file" id="est-excel-input" accept=".xlsx,.xls,.csv" style="display:none;"/>
             <button id="est-refresh" class="btn btn-secondary btn-icon">↻</button>
           </div>
         </div>
@@ -4282,14 +4726,21 @@
     document.getElementById("est-nova-tabela")?.addEventListener("click",async()=>{
       const titulo=prompt("Nome da nova tabela de estoque:");
       if(!titulo) return;
+      // Verificar duplicidade — não sobrescrever tabela existente
+      const jaExiste=tabelas.find(t=>t.titulo.trim().toLowerCase()===titulo.trim().toLowerCase());
+      if(jaExiste){
+        const ir=confirm(`⚠️ Já existe uma tabela com o nome "${jaExiste.titulo}".\n\nDeseja ir para ela?`);
+        if(ir){tabelaAtiva=jaExiste.id;state._estTabelaId=tabelaAtiva;if(!itensPorTabela[tabelaAtiva])await runWithUi(()=>carregarItens(tabelaAtiva),"Carregando...");renderTabsTabelas();renderTabelaItens();}
+        return;
+      }
       await runWithUi(async()=>{
-        const nova=await DB.request("/api/estoque-tabelas",{method:"POST",body:JSON.stringify({titulo})});
+        const nova=await DB.request("/api/estoque-tabelas",{method:"POST",body:JSON.stringify({titulo:titulo.trim()})});
         if(nova?.id){
-          tabelas.unshift({id:nova.id,titulo,descricao:""});
+          tabelas.unshift({id:nova.id,titulo:titulo.trim(),descricao:""});
           tabelaAtiva=nova.id; state._estTabelaId=nova.id;
           itensPorTabela[tabelaAtiva]=[];
           renderTabsTabelas(); renderTabelaItens();
-          toast(`✅ Tabela "${titulo}" criada.`,"success");
+          toast(`✅ Tabela "${titulo.trim()}" criada.`,"success");
         }
       },"Criando tabela...");
     });
@@ -4334,6 +4785,239 @@
     if(ul&&Date.now()-ul.ts<60000){
       toast(`🔒 "${ul.produto}" bloqueado por ${ul.por} — ${ul.motivo}`,"warning",6000);
     }
+
+    // ── Deletar tabela ──────────────────────────────────────────────────────
+    document.getElementById("est-del-tabela")?.addEventListener("click",async()=>{
+      if(!tabelaAtiva){toast("Selecione uma tabela primeiro.","warning");return;}
+      const tabela=tabelas.find(t=>t.id===tabelaAtiva);
+      const itens=itensPorTabela[tabelaAtiva]||[];
+      const msg=itens.length
+        ?`⚠️ A tabela "${tabela?.titulo||tabelaAtiva}" tem ${itens.length} item(ns).
+
+Todos os itens serão EXCLUÍDOS permanentemente.
+
+Digite o nome da tabela para confirmar:`
+        :`Deletar a tabela "${tabela?.titulo||tabelaAtiva}"?
+
+Esta ação não pode ser desfeita. Confirme digitando o nome:`;
+      const confirm_nome=prompt(msg);
+      if(!confirm_nome||confirm_nome.trim()!==tabela?.titulo){toast("Nome incorreto. Tabela não deletada.","warning");return;}
+      await runWithUi(async()=>{
+        await DB.request(`/api/estoque-tabelas/${encodeURIComponent(tabelaAtiva)}`,{method:"DELETE"});
+        tabelas=tabelas.filter(t=>t.id!==tabelaAtiva);
+        delete itensPorTabela[tabelaAtiva];
+        tabelaAtiva=tabelas[0]?.id||"";
+        state._estTabelaId=tabelaAtiva;
+        if(tabelaAtiva&&!itensPorTabela[tabelaAtiva]) await carregarItens(tabelaAtiva);
+        renderTabsTabelas(); renderTabelaItens();
+        toast("🗑️ Tabela deletada.","success");
+      },"Deletando tabela...");
+    });
+
+    // ── Nova tabela — verificar nome duplicado ──────────────────────────────
+    // (já existe o listener acima, adicionamos validação de duplicidade nele)
+    // A validação está dentro do listener original — aqui garantimos que ao criar
+    // com nome já existente, apenas seleciona a existente.
+
+    // ── Importar item de Mercadorias ────────────────────────────────────────
+    document.getElementById("est-import-merc")?.addEventListener("click",()=>{
+      if(!tabelaAtiva){toast("Selecione uma tabela primeiro.","warning");return;}
+      const mercadorias=safeArray(state.cache.mercadorias);
+      if(!mercadorias.length){toast("Nenhuma mercadoria cadastrada.","warning");return;}
+      const itensAtuais=itensPorTabela[tabelaAtiva]||[];
+      const mo=document.createElement("div");
+      mo.style.cssText="position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.7);display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;";
+      let q="";
+      function renderModal(){
+        const filtradas=q?mercadorias.filter(m=>String(m.nome||"").toLowerCase().includes(q.toLowerCase())||String(m.codigo||"").toLowerCase().includes(q.toLowerCase())):mercadorias;
+        mo.innerHTML=`<div style="background:var(--bg);border-radius:16px;padding:20px;width:100%;max-width:480px;max-height:85vh;overflow-y:auto;margin:auto;">
+          <div style="font-size:15px;font-weight:700;margin-bottom:12px;">📦 Importar de Mercadorias</div>
+          <input id="est-merc-q" type="search" placeholder="Buscar produto..." value="${esc(q)}"
+            style="width:100%;padding:8px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;margin-bottom:10px;"/>
+          <div style="display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto;">
+            ${filtradas.map(m=>{
+              const jaTem=itensAtuais.some(i=>String(i.codigo||"").toUpperCase()===String(m.codigo||m.sku||"").toUpperCase()&&i.codigo);
+              return`<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${jaTem?"opacity:.5":""}">
+                <div style="flex:1;overflow:hidden;">
+                  <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.nome||"")}</div>
+                  <div style="font-size:11px;color:var(--muted);">Cód: ${esc(m.codigo||m.sku||"—")} · R$ ${Number(m.valor_venda||m.valorVenda||0).toFixed(2)}</div>
+                </div>
+                ${jaTem?`<span style="font-size:11px;color:var(--amber);">já importado</span>`:`<button class="btn btn-primary" style="font-size:12px;padding:5px 10px;" data-merc-id="${esc(m.id||m._id||"")}">+ Adicionar</button>`}
+              </div>`;
+            }).join("")}
+            ${filtradas.length===0?`<div style="padding:16px;text-align:center;color:var(--muted);">Nenhum resultado.</div>`:""}
+          </div>
+          <button id="est-merc-close" class="btn btn-ghost" style="width:100%;margin-top:12px;">Fechar</button>
+        </div>`;
+        mo.querySelector("#est-merc-q")?.addEventListener("input",e=>{q=e.target.value;renderModal();});
+        mo.querySelector("#est-merc-close")?.addEventListener("click",()=>mo.remove());
+        mo.querySelectorAll("[data-merc-id]").forEach(btn=>{
+          btn.addEventListener("click",async()=>{
+            const id=btn.getAttribute("data-merc-id");
+            const m=mercadorias.find(x=>String(x.id||x._id||"")===id);
+            if(!m) return;
+            await runWithUi(async()=>{
+              const novo=await DB.request("/api/estoque-itens",{
+                method:"POST",
+                body:JSON.stringify({
+                  tabela_id:tabelaAtiva,
+                  produto:String(m.nome||"").toUpperCase(),
+                  codigo:String(m.codigo||m.sku||"").toUpperCase(),
+                  quantidade:Number(m.estoque||m.estoqueAtual||0),
+                  quantidade_min:Number(m.estoqueMin||0),
+                  valor_unit:Number(m.valor_venda||m.valorVenda||0),
+                  unidade:"UN"
+                })
+              });
+              if(novo?.id){
+                if(!itensPorTabela[tabelaAtiva]) itensPorTabela[tabelaAtiva]=[];
+                itensPorTabela[tabelaAtiva].push({id:novo.id,produto:String(m.nome||"").toUpperCase(),codigo:String(m.codigo||m.sku||"").toUpperCase(),quantidade:Number(m.estoque||m.estoqueAtual||0),quantidade_min:Number(m.estoqueMin||0),valor_unit:Number(m.valor_venda||m.valorVenda||0),unidade:"UN",obs:"",bloqueado:0});
+                renderTabelaItens();
+                toast(`✅ "${m.nome}" importado.`,"success");
+                renderModal();
+              }
+            },"Importando...");
+          });
+        });
+      }
+      renderModal();
+      document.body.appendChild(mo);
+      mo.addEventListener("click",e=>{if(e.target===mo)mo.remove();});
+    });
+
+    // ── Exportar Excel ──────────────────────────────────────────────────────
+    document.getElementById("est-export-excel")?.addEventListener("click",()=>{
+      const itens=itensPorTabela[tabelaAtiva]||[];
+      if(!itens.length){toast("Nenhum item para exportar.","warning");return;}
+      const tabela=tabelas.find(t=>t.id===tabelaAtiva);
+      const header=["Código","Produto","Quantidade","Qtd Mínima","Valor Unit.","Unidade","Observações","Status"];
+      const rows=itens.map(i=>[
+        i.codigo||"",i.produto||"",Number(i.quantidade||0),Number(i.quantidade_min||0),
+        Number(i.valor_unit||0).toFixed(2),i.unidade||"UN",i.obs||"",
+        Number(i.bloqueado)?`Bloqueado — ${i.bloqueado_motivo||""}`:""
+      ]);
+      const csv="\uFEFF"+[header,...rows].map(r=>r.map(c=>{const s=String(c);return s.includes(";")?`"${s}"`:s;}).join(";")).join("\n");
+      const a=Object.assign(document.createElement("a"),{
+        href:URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"})),
+        download:`estoque_${(tabela?.titulo||"tabela").replace(/\s+/g,"_")}_${new Date().toISOString().slice(0,10)}.csv`
+      });
+      a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+      toast("📤 Exportado!","success");
+    });
+
+    // ── Importar Excel/CSV ──────────────────────────────────────────────────
+    document.getElementById("est-import-excel")?.addEventListener("click",()=>{
+      if(!tabelaAtiva){toast("Selecione uma tabela primeiro.","warning");return;}
+      document.getElementById("est-excel-input")?.click();
+    });
+    document.getElementById("est-excel-input")?.addEventListener("change",async e=>{
+      const file=e.target.files?.[0]; if(!file) return;
+      e.target.value="";
+      const reader=new FileReader();
+      reader.onload=async ev=>{
+        try{
+          const text=ev.target.result;
+          const lines=text.split(/\r?\n/).filter(l=>l.trim());
+          if(lines.length<2){toast("Arquivo vazio ou inválido.","error");return;}
+          const sep=lines[0].includes(";")?";":","
+          const headers=lines[0].split(sep).map(h=>h.replace(/^"|"$/g,"").trim().toLowerCase());
+          const colIdx=k=>headers.findIndex(h=>h.includes(k));
+          const ciProd=colIdx("produto")||colIdx("nome")||0;
+          const ciCod=colIdx("código")||colIdx("codigo");
+          const ciQtd=colIdx("quant");
+          const ciMin=colIdx("mín")||colIdx("min")||colIdx("minima");
+          const ciVal=colIdx("valor");
+          const ciUn=colIdx("unid");
+          const ciObs=colIdx("obs");
+          const novos=[];
+          for(let i=1;i<lines.length;i++){
+            const cols=lines[i].split(sep).map(c=>c.replace(/^"|"$/g,"").trim());
+            const prod=cols[ciProd]||""; if(!prod) continue;
+            novos.push({
+              tabela_id:tabelaAtiva,
+              produto:prod.toUpperCase(),
+              codigo:(ciCod>=0?cols[ciCod]||"":"").toUpperCase(),
+              quantidade:ciQtd>=0?Number(String(cols[ciQtd]).replace(",","."))||0:0,
+              quantidade_min:ciMin>=0?Number(String(cols[ciMin]).replace(",","."))||0:0,
+              valor_unit:ciVal>=0?Number(String(cols[ciVal]).replace(",","."))||0:0,
+              unidade:ciUn>=0&&cols[ciUn]?cols[ciUn].toUpperCase():"UN",
+              obs:ciObs>=0?cols[ciObs]||"":""
+            });
+          }
+          if(!novos.length){toast("Nenhum produto encontrado.","warning");return;}
+          const ok=confirm(`Importar ${novos.length} item(ns) para a tabela "${tabelas.find(t=>t.id===tabelaAtiva)?.titulo||""}"?`);
+          if(!ok) return;
+          await runWithUi(async()=>{
+            let count=0;
+            for(const item of novos){
+              try{
+                const novo=await DB.request("/api/estoque-itens",{method:"POST",body:JSON.stringify(item)});
+                if(novo?.id){if(!itensPorTabela[tabelaAtiva])itensPorTabela[tabelaAtiva]=[];itensPorTabela[tabelaAtiva].push({...item,id:novo.id,bloqueado:0});count++;}
+              }catch(e){console.warn("Erro ao importar item:",e?.message);}
+            }
+            renderTabelaItens();
+            toast(`✅ ${count} item(ns) importado(s).`,"success");
+          },"Importando...");
+        }catch(e){toast("Erro ao ler arquivo: "+e.message,"error");}
+      };
+      reader.readAsText(file,"utf-8");
+    });
+
+    // ── Imprimir PDF do estoque ─────────────────────────────────────────────
+    document.getElementById("est-print-pdf")?.addEventListener("click",()=>{
+      const itens=itensPorTabela[tabelaAtiva]||[];
+      const tabela=tabelas.find(t=>t.id===tabelaAtiva);
+      const win=window.open("","_blank","width=900,height=700");
+      if(!win){toast("Permita popups.","warning");return;}
+      const total=itens.reduce((a,i)=>a+Number(i.quantidade||0)*Number(i.valor_unit||0),0);
+      win.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/>
+        <title>Estoque — ${tabela?.titulo||""}</title>
+        <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:Arial,sans-serif;font-size:12px;color:#222;padding:20px;}
+        .no-print{margin-bottom:12px;display:flex;gap:8px;}
+        h1{font-size:16px;margin-bottom:4px;}
+        .sub{font-size:11px;color:#666;margin-bottom:14px;}
+        table{width:100%;border-collapse:collapse;}
+        thead th{background:#1a2744;color:#fff;padding:7px 10px;text-align:left;}
+        tbody tr:nth-child(even){background:#f9fafb;}
+        tbody td{padding:6px 10px;border-bottom:1px solid #e5e7eb;}
+        .alerta{color:#d97706;font-weight:700;}
+        .footer{margin-top:16px;font-size:10px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:8px;}
+        @media print{.no-print{display:none;}}</style></head><body>
+        <div class="no-print">
+          <button onclick="window.print()" style="padding:7px 14px;background:#1a2744;color:#fff;border:none;border-radius:6px;cursor:pointer;">🖨️ Imprimir</button>
+          <button onclick="window.close()" style="padding:7px 14px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;cursor:pointer;">✕ Fechar</button>
+        </div>
+        <h1>📦 Estoque — ${tabela?.titulo||""}</h1>
+        <div class="sub">Gerado em ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})} · CEFEQ Suprimentos Industriais · ${itens.length} itens</div>
+        <table><thead><tr><th>Código</th><th>Produto</th><th>Qtd</th><th>Val.Unit</th><th>Total</th><th>Un</th><th>Obs</th></tr></thead>
+        <tbody>
+          ${itens.map(i=>{
+            const qtd=Number(i.quantidade||0);
+            const vun=Number(i.valor_unit||0);
+            const tot=qtd*vun;
+            const baixo=Number(i.quantidade_min||0)>0&&qtd<=Number(i.quantidade_min||0);
+            return`<tr>
+              <td style="font-family:monospace;font-size:11px;">${i.codigo||"—"}</td>
+              <td style="font-weight:600;${baixo?"color:#d97706;":""}">
+                ${i.produto||""}${baixo?" ⚠️":""}${Number(i.bloqueado)?` 🔒`:""}
+              </td>
+              <td style="text-align:center;font-weight:700;">${qtd}</td>
+              <td style="text-align:right;">R$ ${vun.toFixed(2)}</td>
+              <td style="text-align:right;font-weight:600;">R$ ${tot.toFixed(2)}</td>
+              <td style="text-align:center;">${i.unidade||"UN"}</td>
+              <td style="font-size:10px;color:#666;">${i.obs||""}</td>
+            </tr>`;
+          }).join("")}
+          <tr style="background:#1a2744;color:#fff;font-weight:700;">
+            <td colspan="4" style="padding:8px 10px;">TOTAL GERAL</td>
+            <td style="text-align:right;padding:8px 10px;">R$ ${total.toFixed(2)}</td>
+            <td colspan="2"></td>
+          </tr>
+        </tbody></table>
+        <div class="footer">SuperVenda · Willtech84</div>
+      </body></html>`);
+      win.document.close();
+    });
   }
 
   // ─── Rotas com Geolocalização ─────────────────────────────────────────────────
@@ -5059,6 +5743,65 @@
       },"Restaurando backup...");
     });
     $("#sidebar-logout-btn")?.addEventListener("click",doLogout);
+
+    // ── Importar backup do Cloudflare ──────────────────────────────────────
+    $("#sidebar-cf-backup-btn")?.addEventListener("click",()=>$("#sidebar-cf-backup-file")?.click());
+    $("#sidebar-cf-backup-file")?.addEventListener("change",async e=>{
+      const file=e.target.files[0]; if(!file) return;
+      e.target.value="";
+      if(!confirm("⚠️ Importar backup do Cloudflare D1.\n\nIsso vai CRIAR novos registros (não sobrescreve IDs existentes).\n\nDeseja continuar?")) return;
+      await runWithUi(async()=>{
+        const text=await file.text();
+        let bk;
+        try{ bk=JSON.parse(text); }
+        catch{ toast("Arquivo inválido.","error"); return; }
+        // Formato D1 export: {results:[{type:'table',name:...,columns:[],rows:[[],...]},...]}
+        // ou formato backup supervenda: {data:{tables:{...}}}
+        // ou array direto de objetos
+        const tables=bk?.results||bk?.data?.tables||bk?.tables||bk?.data||bk;
+        if(!tables){ toast("Formato de backup do Cloudflare não reconhecido.","error"); return; }
+
+        const recursos={
+          clientes:"clientes", produtos:"mercadorias", mercadorias:"mercadorias",
+          pedidos:"pedidos", despesas:"despesas", lembretes:"lembretes",
+          rotas:"rotas", notas:"notas", visitas:"visitas",
+        };
+        let ok=0, erros=0;
+
+        async function importarRows(rows, resource){
+          for(const row of rows){
+            try{
+              const payload={...row};
+              delete payload.vendor_id; delete payload.updated_at; delete payload.created_at; delete payload.owner_id;
+              await DB.create(resource,payload); ok++;
+            }catch(e2){
+              try{ const id=row.id||row._id; if(id){await DB.update(resource,id,row);ok++;} }
+              catch{ erros++; }
+            }
+          }
+        }
+
+        if(Array.isArray(tables)){
+          // Formato D1: array de {type,name,columns,rows}
+          for(const tbl of tables){
+            if(tbl.type!=="table"||!tbl.name||!Array.isArray(tbl.rows)) continue;
+            const resource=recursos[tbl.name];
+            if(!resource) continue;
+            const cols=tbl.columns||[];
+            const objRows=tbl.rows.map(r=>Object.fromEntries(cols.map((c,i)=>[c,r[i]])));
+            await importarRows(objRows,resource);
+          }
+        } else if(typeof tables==="object"){
+          for(const [tabela,resource] of Object.entries(recursos)){
+            const rows=safeArray(tables[tabela]||tables[resource]);
+            if(!rows.length) continue;
+            await importarRows(rows,resource);
+          }
+        }
+        await preloadAll(); renderCurrent();
+        toast(`✅ Backup Cloudflare importado: ${ok} registros${erros?` · ${erros} erros`:""}.`,ok?"success":"warning",6000);
+      },"Importando backup Cloudflare...");
+    });
 
     // Modo claro/escuro
     const themeBtn=$("#btn-theme");
