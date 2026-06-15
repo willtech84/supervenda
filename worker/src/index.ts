@@ -168,7 +168,21 @@ async function nextId(env: Env, vendorId: string, kind: string) {
 
 /** -------------------- backup helper -------------------- **/
 async function buildBackupPayload(env: Env) {
-  const tables = ["vendors", "clientes", "produtos", "pedidos", "despesas", "lembretes", "rotas", "notas"];
+  const tables = [
+    "vendors", 
+    "clientes", 
+    "produtos", 
+    "pedidos", 
+    "despesas", 
+    "lembretes", 
+    "rotas", 
+    "notas",
+    // ✅ NOVO: Adicionar tabelas faltantes
+    "vendas",        // Vendas diárias
+    "visitas",       // Visitas/Contatos
+    "estoque_tabelas", // Tabelas de estoque
+    "estoque_itens"  // Itens do estoque
+  ];
   const payload: Record<string, any> = { exportedAt: nowISO(), tables: {} };
 
   for (const t of tables) {
@@ -176,7 +190,9 @@ async function buildBackupPayload(env: Env) {
       const rows = await env.DB.prepare(`SELECT * FROM ${t}`).all<any>();
       payload.tables[t] = rows.results || [];
     } catch (e: any) {
-      payload.tables[t] = { _error: e?.message || "Falha" };
+      // Se tabela não existir, não retorna erro, só pula
+      console.warn(`Tabela ${t} não encontrada ou erro:`, e?.message);
+      payload.tables[t] = [];
     }
   }
   return payload;
