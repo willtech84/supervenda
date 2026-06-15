@@ -40,8 +40,26 @@
   function getId(item) { return item?.id??item?._id??item?.codigo??""; }
   function safeArray(v) { return Array.isArray(v)?v:[]; }
   function downloadJson(fname,data) {
-    const a=Object.assign(document.createElement("a"),{href:URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json"})),download:fname});
-    a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    try {
+      // Converter em chunks para não travar o navegador em datasets grandes
+      const json=JSON.stringify(data,null,2);
+      const blob=new Blob([json],{type:"application/json"});
+      // Se >10MB, dar warning
+      if(blob.size>10*1024*1024){
+        console.warn(`⚠️ Arquivo grande: ${(blob.size/1024/1024).toFixed(1)}MB`);
+      }
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=url;
+      a.download=fname;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url),2000);
+    }catch(e){
+      toast("Erro ao gerar arquivo: "+e.message,"error");
+      console.error(e);
+    }
   }
 
   // Toast
@@ -4674,6 +4692,7 @@
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
             ${isAdmin?`<button id="est-nova-tabela" class="btn btn-secondary" style="font-size:12px;">➕ Nova tabela</button><button id="est-del-tabela" class="btn btn-secondary" style="font-size:12px;color:var(--red);">🗑️ Deletar tabela</button>`:""}
             <button id="est-add-item" class="btn btn-primary" style="width:auto;font-size:13px;">+ Adicionar item</button>
+            <button id="est-export-merc" class="btn btn-secondary" style="font-size:12px;" title="Sincronizar estoque com mercadorias">💾 Sincronizar Mercadorias</button>
             <button id="est-import-merc" class="btn btn-secondary" style="font-size:12px;" title="Importar item de Mercadorias">📦 De Mercadoria</button>
             <button id="est-import-excel" class="btn btn-secondary" style="font-size:12px;" title="Importar Excel">📥 Excel</button>
             <button id="est-export-excel" class="btn btn-secondary" style="font-size:12px;" title="Exportar Excel">📤 Excel</button>
@@ -4759,26 +4778,78 @@
       },"Criando tabela...");
     });
 
-    // Botão adicionar item
+    // Botão adicionar item — SIMPLIFICADO: só nome + quantidade
     document.getElementById("est-add-item")?.addEventListener("click",async()=>{
       if(!tabelaAtiva){toast("Selecione ou crie uma tabela primeiro.","warning");return;}
-      const produto=prompt("Nome do produto:");
-      if(!produto) return;
-      const codigo=prompt("Código (opcional):")||"";
-      const qtd=Number(prompt("Quantidade inicial:","0")||0);
-      const qtdMin=Number(prompt("Quantidade mínima (alerta estoque baixo):","0")||0);
-      await runWithUi(async()=>{
-        const novo=await DB.request("/api/estoque-itens",{
-          method:"POST",
-          body:JSON.stringify({tabela_id:tabelaAtiva,produto:produto.toUpperCase(),codigo:codigo.toUpperCase(),quantidade:qtd,quantidade_min:qtdMin,unidade:"UN"})
-        });
-        if(novo?.id){
-          if(!itensPorTabela[tabelaAtiva]) itensPorTabela[tabelaAtiva]=[];
-          itensPorTabela[tabelaAtiva].push({id:novo.id,produto:produto.toUpperCase(),codigo:codigo.toUpperCase(),quantidade:qtd,quantidade_min:qtdMin,unidade:"UN",obs:"",bloqueado:0});
-          renderTabelaItens();
-          toast(`✅ "${produto}" adicionado.`,"success");
-        }
-      },"Adicionando...");
+      
+      // Modal simplificado: só nome + quantidade
+      const mo=document.createElement("div");
+      mo.style.cssText="position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:20px;";
+      mo.innerHTML=`
+        <div style="background:var(--bg);border-radius:16px;padding:24px;width:100%;max-width:400px;display:flex;flex-direction:column;gap:12px;">
+          <div style="font-size:15px;font-weight:700;">➕ Novo item no Estoque</div>
+          <input id="est-novo-nome" type="text" placeholder="Nome do produto" 
+            style="width:100%;padding:10px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;"/>
+          <input id="est-novo-qtd" type="number" placeholder="Quantidade" value="0" min="0"
+            style="width:100%;padding:10px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;"/>
+          <input id="est-novo-codigo" type="text" placeholder="Código (opcional)" 
+            style="width:100%;padding:10px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;"/>
+          <div style="display:flex;gap:8px;">
+            <button id="est-novo-ok" class="btn btn-primary" style="flex:1;">Salvar</button>
+            <button id="est-novo-cancel" class="btn btn-ghost" style="flex:1;">Cancelar</button>
+          </div>
+        </div>`;
+      document.body.appendChild(mo);
+      
+      const nomInp=mo.querySelector("#est-novo-nome");
+      const qtdInp=mo.querySelector("#est-novo-qtd");
+      const codInp=mo.querySelector("#est-novo-codigo");
+      
+      const fechar=()=>mo.remove();
+      mo.querySelector("#est-novo-cancel")?.addEventListener("click",fechar);
+      mo.querySelector("#est-novo-ok")?.addEventListener("click",async()=>{
+        const nome=(nomInp?.value||"").trim();
+        if(!nome){toast("Informe o nome do produto.","warning");return;}
+        const qtd=Number(qtdInp?.value||0);
+        const cod=(codInp?.value||"").trim().toUpperCase();
+        
+        fechar();
+        await runWithUi(async()=>{
+          const novo=await DB.request("/api/estoque-itens",{
+            method:"POST",
+            body:JSON.stringify({
+              tabela_id:tabelaAtiva,
+              produto:nome.toUpperCase(),
+              codigo:cod||"",
+              quantidade:qtd,
+              quantidade_min:0,
+              unidade:"UN"
+            })
+          });
+          if(novo?.id){
+            if(!itensPorTabela[tabelaAtiva]) itensPorTabela[tabelaAtiva]=[];
+            itensPorTabela[tabelaAtiva].push({
+              id:novo.id,
+              produto:nome.toUpperCase(),
+              codigo:cod,
+              quantidade:qtd,
+              quantidade_min:0,
+              unidade:"UN",
+              obs:"",
+              bloqueado:0,
+              valor_unit:0
+            });
+            renderTabelaItens();
+            toast(`✅ "${nome}" adicionado.`,"success");
+          }
+        },"Adicionando...");
+      });
+      
+      setTimeout(()=>nomInp?.focus(),80);
+      nomInp?.addEventListener("keydown",e=>{
+        if(e.key==="Enter") mo.querySelector("#est-novo-ok")?.click();
+        else if(e.key==="Escape") fechar();
+      });
     });
 
     // Busca
@@ -4930,6 +5001,58 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
 
       renderLista();
       setTimeout(()=>inp?.focus(),80);
+    });
+
+    // ── Sincronizar Estoque → Mercadorias ────────────────────────────────────
+    document.getElementById("est-export-merc")?.addEventListener("click",async()=>{
+      const itens=itensPorTabela[tabelaAtiva]||[];
+      if(!itens.length){toast("Nenhum item no estoque para sincronizar.","warning");return;}
+      
+      if(!confirm(`✅ Sincronizar ${itens.length} item${itens.length!==1?"ns":""} do estoque para Mercadorias?\n\nProdutos com mesmo código serão atualizados, outros serão criados novos.`)) return;
+      
+      await runWithUi(async()=>{
+        let criados=0, atualizados=0, erros=0;
+        const mercadorias=safeArray(state.cache.mercadorias);
+        
+        for(const item of itens){
+          try{
+            // Verificar se já existe por código
+            const existe=mercadorias.find(m=>{
+              const mCod=String(m.codigo||m.sku||"").toUpperCase();
+              const iCod=String(item.codigo||"").toUpperCase();
+              return mCod&&iCod&&mCod===iCod;
+            });
+            
+            const payload={
+              nome:item.produto||"",
+              codigo:item.codigo||"",
+              estoque:Number(item.quantidade||0),
+              estoqueMin:Number(item.quantidade_min||0),
+              valor_venda:Number(item.valor_unit||0),
+              descricao:item.obs||""
+            };
+            
+            if(existe){
+              // Atualizar existente
+              await DB.update("mercadorias",existe.id,payload);
+              atualizados++;
+            }else{
+              // Criar novo
+              await DB.create("mercadorias",payload);
+              criados++;
+              mercadorias.push(payload);
+            }
+          }catch(e){
+            console.error("Erro ao sincronizar:",e);
+            erros++;
+          }
+        }
+        
+        await preloadAll();
+        renderCurrent();
+        const msg=`✅ Sincronizado: ${criados} novo${criados!==1?"s":""}, ${atualizados} atualizado${atualizados!==1?"s":""}${erros?`, ${erros} erro${erros!==1?"s":""}`:""}`;
+        toast(msg,erros?"warning":"success",6000);
+      },"Sincronizando...");
     });
 
     // ── Exportar Excel ──────────────────────────────────────────────────────
@@ -5765,25 +5888,37 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
           despesas:"despesas", lembretes:"lembretes", rotas:"rotas", notas:"notas",
         };
         let ok=0, erros=0;
+        
+        // Processar em paralelo (batch) para não travar o navegador
+        const promises=[];
         for(const [tabela,resource] of Object.entries(recursos)){
           const rows=safeArray(tables[tabela]||tables[resource]);
           if(!rows.length) continue;
-          for(const row of rows){
-            try{
-              // Normalizar campos comuns
-              const payload={...row};
-              delete payload.vendor_id; delete payload.updated_at; delete payload.created_at;
-              await DB.create(resource,payload);
-              ok++;
-            }catch(e2){
-              // Se já existe (conflito de ID), tentar update
-              try{
-                const id=row.id||row._id;
-                if(id){ await DB.update(resource,id,row); ok++; }
-              }catch{ erros++; }
-            }
+          
+          // Processar em chunks de 10 para não sobrecarregar
+          for(let i=0;i<rows.length;i+=10){
+            const chunk=rows.slice(i,i+10);
+            const chunkPromise=(async()=>{
+              for(const row of chunk){
+                try{
+                  const payload={...row};
+                  delete payload.vendor_id; delete payload.updated_at; delete payload.created_at;
+                  await DB.create(resource,payload);
+                  ok++;
+                }catch(e2){
+                  try{
+                    const id=row.id||row._id;
+                    if(id){ await DB.update(resource,id,row); ok++; }
+                  }catch{ erros++; }
+                }
+              }
+            })();
+            promises.push(chunkPromise);
           }
         }
+        
+        // Aguardar todos em paralelo
+        await Promise.all(promises);
         await preloadAll();
         renderCurrent();
         toast(`✅ Restore concluído: ${ok} registros restaurados${erros?` · ${erros} erros`:""}`,ok?"success":"warning",6000);
@@ -5791,63 +5926,66 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
     });
     $("#sidebar-logout-btn")?.addEventListener("click",doLogout);
 
-    // ── Importar backup do Cloudflare ──────────────────────────────────────
-    $("#sidebar-cf-backup-btn")?.addEventListener("click",()=>$("#sidebar-cf-backup-file")?.click());
-    $("#sidebar-cf-backup-file")?.addEventListener("change",async e=>{
-      const file=e.target.files[0]; if(!file) return;
-      e.target.value="";
-      if(!confirm("⚠️ Importar backup do Cloudflare D1.\n\nIsso vai CRIAR novos registros (não sobrescreve IDs existentes).\n\nDeseja continuar?")) return;
+    // ── Importar backup direto da Cloudflare D1 (sem arquivo) ──────────────────
+    $("#sidebar-cf-backup-btn")?.addEventListener("click",async()=>{
+      if(!confirm("⚠️ Importar dados direto do Cloudflare D1.\n\nIsso vai CRIAR novos registros (não sobrescreve IDs existentes).\n\nDeseja continuar?")) return;
       await runWithUi(async()=>{
-        const text=await file.text();
-        let bk;
-        try{ bk=JSON.parse(text); }
-        catch{ toast("Arquivo inválido.","error"); return; }
-        // Formato D1 export: {results:[{type:'table',name:...,columns:[],rows:[[],...]},...]}
-        // ou formato backup supervenda: {data:{tables:{...}}}
-        // ou array direto de objetos
-        const tables=bk?.results||bk?.data?.tables||bk?.tables||bk?.data||bk;
-        if(!tables){ toast("Formato de backup do Cloudflare não reconhecido.","error"); return; }
+        try{
+          // Buscar backup direto da API
+          const bk=await DB.request("/api/backup",{method:"GET"});
+          if(!bk){ toast("Não foi possível obter dados do Cloudflare.","error"); return; }
 
-        const recursos={
-          clientes:"clientes", produtos:"mercadorias", mercadorias:"mercadorias",
-          pedidos:"pedidos", despesas:"despesas", lembretes:"lembretes",
-          rotas:"rotas", notas:"notas", visitas:"visitas",
-        };
-        let ok=0, erros=0;
-
-        async function importarRows(rows, resource){
-          for(const row of rows){
-            try{
-              const payload={...row};
-              delete payload.vendor_id; delete payload.updated_at; delete payload.created_at; delete payload.owner_id;
-              await DB.create(resource,payload); ok++;
-            }catch(e2){
-              try{ const id=row.id||row._id; if(id){await DB.update(resource,id,row);ok++;} }
-              catch{ erros++; }
-            }
+          // Suportar ambos os formatos: {data:{tables:{...}}} ou {tables:{...}}
+          const tables=bk?.data?.tables||bk?.tables||bk?.data||null;
+          if(!tables||typeof tables!=="object"){ 
+            toast("Formato de dados inválido.","error"); 
+            console.warn("Dados recebidos:",bk);
+            return; 
           }
-        }
 
-        if(Array.isArray(tables)){
-          // Formato D1: array de {type,name,columns,rows}
-          for(const tbl of tables){
-            if(tbl.type!=="table"||!tbl.name||!Array.isArray(tbl.rows)) continue;
-            const resource=recursos[tbl.name];
-            if(!resource) continue;
-            const cols=tbl.columns||[];
-            const objRows=tbl.rows.map(r=>Object.fromEntries(cols.map((c,i)=>[c,r[i]])));
-            await importarRows(objRows,resource);
-          }
-        } else if(typeof tables==="object"){
+          const recursos={
+            clientes:"clientes", produtos:"mercadorias", mercadorias:"mercadorias",
+            pedidos:"pedidos", despesas:"despesas", lembretes:"lembretes",
+            rotas:"rotas", notas:"notas", visitas:"visitas",
+          };
+          let ok=0, erros=0;
+
+          // Processar em paralelo com chunks
+          const promises=[];
           for(const [tabela,resource] of Object.entries(recursos)){
             const rows=safeArray(tables[tabela]||tables[resource]);
             if(!rows.length) continue;
-            await importarRows(rows,resource);
+            
+            for(let i=0;i<rows.length;i+=10){
+              const chunk=rows.slice(i,i+10);
+              const chunkPromise=(async()=>{
+                for(const row of chunk){
+                  try{
+                    const payload={...row};
+                    delete payload.vendor_id; delete payload.updated_at; delete payload.created_at; delete payload.owner_id;
+                    await DB.create(resource,payload); 
+                    ok++;
+                  }catch(e2){
+                    try{ 
+                      const id=row.id||row._id; 
+                      if(id){await DB.update(resource,id,row);ok++;} 
+                    }catch{ erros++; }
+                  }
+                }
+              })();
+              promises.push(chunkPromise);
+            }
           }
+
+          await Promise.all(promises);
+          await preloadAll(); 
+          renderCurrent();
+          toast(`✅ Cloudflare importado: ${ok} registros${erros?` · ${erros} erros`:""}.`,ok?"success":"warning",6000);
+        }catch(e){
+          toast("Erro ao importar: "+(e?.message||"Verifique se você está logado"),"error");
+          console.error(e);
         }
-        await preloadAll(); renderCurrent();
-        toast(`✅ Backup Cloudflare importado: ${ok} registros${erros?` · ${erros} erros`:""}.`,ok?"success":"warning",6000);
-      },"Importando backup Cloudflare...");
+      },"Importando do Cloudflare...");
     });
 
     // Modo claro/escuro
