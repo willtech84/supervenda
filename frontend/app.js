@@ -1554,10 +1554,8 @@
       const wppLink=telCliente?`https://wa.me/55${telCliente}?text=${msgWpp}`:"";
       const emailLink=emailCliente?`mailto:${emailCliente}?subject=Orçamento%20nº%20${numOrc}&body=${encodeURIComponent(`Olá ${cliente.nome||""}!\n\nSegue o orçamento nº ${numOrc} conforme solicitado.\nValor total: ${moneyBR(pedido.total)}\n\nAtenciosamente,\n${nomeVendedor}`)}`:"";
 
-      const win=window.open("","_blank","width=850,height=700");
-      if(!win){toast("Permita popups para gerar o orçamento.","warning");return;}
-
-      win.document.write(`<!DOCTYPE html><html lang="pt-BR"><head>
+      // svPrint: mantém o app em foco no Android
+      svPrint(`<!DOCTYPE html><html lang="pt-BR"><head>
       <meta charset="UTF-8"><title>Orçamento nº ${numOrc}</title>
       <style>
         *{box-sizing:border-box;margin:0;padding:0}
@@ -1588,7 +1586,7 @@
         <div class="btn-bar">
           <button class="btn-print" onclick="window.print()">🖨️ Imprimir / Salvar PDF</button>
           ${wppLink
-            ?`<a class="btn-wpp" href="${wppLink}" target="_blank">💬 Enviar WhatsApp</a>`
+            ?`<a class="btn-wpp" href="${wppLink}" target="_blank" rel="noopener noreferrer">💬 Enviar WhatsApp</a>`
             :`<button class="btn-wpp btn-disabled" disabled title="Cadastre o telefone do cliente">💬 WhatsApp</button>`}
           ${emailLink
             ?`<a class="btn-mail" href="${emailLink}">✉️ Enviar E-mail</a>`
@@ -1932,8 +1930,7 @@
     }
 
     function gerarPDF(){
-      const win=window.open("","_blank","width=800,height=600");
-      if(!win) return toast("Permita popups para gerar PDF.","warning");
+      // svPrint: mantém o app em foco no Android
       const nomeEmpresa=DB.getUser()?.name||"Supervenda";
       const dataGer=new Date().toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
 
@@ -1953,7 +1950,7 @@
         ?`<tr style="background:#f0f0f0;font-weight:700;"><td colspan="5">TOTAL</td><td style="text-align:right;">${moneyBR(dadosFiltrados.reduce((a,p)=>a+Number(p.total||0),0))}</td></tr>`
         :`<tr style="background:#f0f0f0;font-weight:700;"><td colspan="4">TOTAL</td><td style="text-align:right;">${moneyBR(dadosFiltrados.reduce((a,d)=>a+Number(d.valor||0),0))}</td></tr>`;
 
-      win.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Relatório ${titulo}</title>
+      svPrint(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Relatório ${titulo}</title>
       <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Segoe UI',Arial,sans-serif;color:#111;padding:20px;font-size:13px}
       h1{font-size:18px;margin-bottom:4px}h2{font-size:13px;color:#555;font-weight:400;margin-bottom:16px}
       table{width:100%;border-collapse:collapse;font-size:12px}th{background:#1a2744;color:#fff;padding:8px;text-align:left}
@@ -1967,8 +1964,7 @@
       </div>
       <table><thead><tr>${colunas.map(c=>`<th>${c}</th>`).join("")}</tr></thead>
       <tbody>${linhas}${totalLinha}</tbody></table>
-      </body></html>`);
-      win.document.close();
+      </body></html>`, "SuperVenda");
     }
 
     root.innerHTML=`
@@ -3305,8 +3301,7 @@
       const loja=filtradas.filter(v=>/pedido|realizado/i.test(v.resultado||"")).length;
       const neg=filtradas.filter(v=>/interesse|negoci|aguard/i.test(v.resultado||"")).length;
       const cidades=[...new Set(filtradas.map(v=>v.cidade).filter(Boolean))].length;
-      const win=window.open("","_blank","width=950,height=750");
-      if(!win){toast("Permita popups.","warning");return;}
+      // svPrint relatório visitas
       win.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/>
         <title>Relatório Visitas</title>
         <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:Arial,sans-serif;font-size:12px;background:#fff;color:#222;padding:20px;}
@@ -3706,8 +3701,7 @@
 
       // Imprimir gráfico
       document.getElementById("vis-print-grafico")?.addEventListener("click",()=>{
-        const win=window.open("","_blank","width=900,height=700");
-        if(!win){toast("Permita popups.","warning");return;}
+        // svPrint gráfico visitas
         const html=cont.innerHTML;
         win.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/><title>Gráficos Visitas</title>
           <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:Arial,sans-serif;font-size:12px;padding:20px;color:#222;}
@@ -3897,7 +3891,9 @@
             .then(r=>{if(!r.ok) throw new Error("Erro ao carregar PDF");return r.blob();})
             .then(blob=>{
               const blobUrl=URL.createObjectURL(blob);
-              window.open(blobUrl,"_blank");
+              // Abrir PDF: usar <a> para evitar nova aba no modo PWA
+              const _a=Object.assign(document.createElement("a"),{href:blobUrl,target:"_blank"});
+              _a.click();
               setTimeout(()=>URL.revokeObjectURL(blobUrl),60000);
             })
             .catch(e=>toast(e?.message||"Falha ao abrir PDF","error"));
@@ -5018,8 +5014,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
     document.getElementById("est-print-pdf")?.addEventListener("click",()=>{
       const itens=itensPorTabela[tabelaAtiva]||[];
       const tabela=tabelas.find(t=>t.id===tabelaAtiva);
-      const win=window.open("","_blank","width=900,height=700");
-      if(!win){toast("Permita popups.","warning");return;}
+      // svPrint estoque
       const total=itens.reduce((a,i)=>a+Number(i.quantidade||0)*Number(i.valor_unit||0),0);
       win.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"/>
         <title>Estoque — ${tabela?.titulo||""}</title>
@@ -5412,7 +5407,8 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
       const origem=waypoints[0],destino=waypoints[waypoints.length-1];
       const via=waypoints.slice(1,-1).join("|");
       const url=`https://www.google.com/maps/dir/?api=1&origin=${origem}&destination=${destino}${via?`&waypoints=${via}`:""}&travelmode=driving`;
-      window.open(url,"_blank");
+      // Abrir Maps externamente via <a> (não cria aba acumulada no PWA)
+      Object.assign(document.createElement("a"),{href:url,target:"_blank",rel:"noopener"}).click();
     });
 
     // Salvar rota
@@ -6158,6 +6154,41 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
     // Inicializar status visual
     atualizarBarraOnline(navigator.onLine);
 
+    // ── Utilitário de impressão sem abrir nova aba ───────────────────────────
+    // Usado por relatórios, PDF, etc — mantém o app em foreground no Android
+    window.svPrint = function(htmlContent, titulo) {
+      // Tenta usar iframe invisível para impressão (mantém o app em foco)
+      const iframe = document.createElement('iframe');
+      iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;';
+      document.body.appendChild(iframe);
+      try {
+        iframe.contentDocument.open();
+        iframe.contentDocument.write(htmlContent);
+        iframe.contentDocument.close();
+        setTimeout(() => {
+          try {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+          } catch(e) {
+            // Fallback: blob URL numa nova janela (último recurso)
+            const blob = new Blob([htmlContent], {type:'text/html;charset=utf-8'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.target = '_blank'; a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 2000);
+          }
+          setTimeout(() => iframe.remove(), 3000);
+        }, 500);
+      } catch(e) {
+        iframe.remove();
+        const blob = new Blob([htmlContent], {type:'text/html;charset=utf-8'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.target = '_blank'; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }
+    };
+
     // Registrar Service Worker
     if('serviceWorker' in navigator){
       navigator.serviceWorker.register('/sw.js',{scope:'/'})
@@ -6167,6 +6198,27 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
             if(e.data?.type==='PROCESS_QUEUE') DB.processQueue(true);
           });
         }).catch(e=>console.warn('SW:',e));
+    }
+
+    // Detectar modo de execução — avisar se não está instalado como PWA
+    const isPWA = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true
+      || document.referrer.includes('android-app://');
+    if(!isPWA && /android/i.test(navigator.userAgent)){
+      // Mostrar banner discreto sugerindo instalar
+      setTimeout(()=>{
+        const banner=document.createElement('div');
+        banner.id='sv-pwa-banner';
+        banner.style.cssText='position:fixed;bottom:80px;left:12px;right:12px;z-index:9999;background:#1a2744;border:1px solid #4488ff;border-radius:12px;padding:12px 14px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 20px rgba(0,0,0,.5);';
+        banner.innerHTML=`
+          <div style="flex:1;">
+            <div style="font-size:13px;font-weight:700;color:#e8eef8;">📲 Instalar SuperVenda</div>
+            <div style="font-size:11px;color:#6b82a8;margin-top:2px;">Para evitar recargas e acúmulo de abas, instale como app: Menu ⋮ → <strong style="color:#4488ff;">Adicionar à tela inicial</strong></div>
+          </div>
+          <button onclick="document.getElementById('sv-pwa-banner')?.remove()" style="background:none;border:none;color:#6b82a8;font-size:18px;cursor:pointer;padding:4px;">✕</button>`;
+        document.body.appendChild(banner);
+        setTimeout(()=>banner.remove(), 12000);
+      }, 3000);
     }
 
     // Sync manual pelo botão ⟳
