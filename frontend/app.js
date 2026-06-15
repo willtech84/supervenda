@@ -14,7 +14,20 @@
 
   const state = {
     route: "dashboard",
-    cache: { clientes:[], mercadorias:[], pedidos:[], rotas:[], despesas:[], lembretes:[], notas:[] },
+    cache: { 
+      clientes:[], 
+      mercadorias:[], 
+      pedidos:[], 
+      rotas:[], 
+      despesas:[], 
+      lembretes:[], 
+      notas:[],
+      // ✅ NOVO: Cache para vendas e estoque
+      vendas:[],
+      visitas:[],
+      estoque_tabelas:[],
+      estoque_itens:[]
+    },
     ui: { search: "" },
     lembretesPopupShown: false,
   };
@@ -308,8 +321,9 @@
       clientes:"clientes", mercadorias:"mercadorias", pedidos:"pedidos",
       rotas:"rotas", despesas:"despesas", lembretes:"lembretes",
       notas:"anotacoes",  // recurso da API "notas" → permissão chave "anotacoes"
+      vendas:"vendas", visitas:"visitas", estoque_tabelas:"estoque", estoque_itens:"estoque"
     };
-    const todos=["clientes","mercadorias","pedidos","rotas","despesas","lembretes","notas"];
+    const todos=["clientes","mercadorias","pedidos","rotas","despesas","lembretes","notas","vendas","visitas","estoque_tabelas","estoque_itens"];
     // Filtrar só os que o usuário tem permissão de ver
     const permitidos=todos.filter(r=>{
       if(isAdmin) return true;
@@ -5884,8 +5898,18 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
         if(!tables||typeof tables!=="object"){ toast("Formato de backup inválido.","error"); return; }
 
         const recursos={
-          clientes:"clientes", produtos:"mercadorias", pedidos:"pedidos",
-          despesas:"despesas", lembretes:"lembretes", rotas:"rotas", notas:"notas",
+          clientes:"clientes", 
+          produtos:"mercadorias", 
+          pedidos:"pedidos",
+          despesas:"despesas", 
+          lembretes:"lembretes", 
+          rotas:"rotas", 
+          notas:"notas",
+          // ✅ NOVO: Tabelas de vendas e estoque
+          vendas:"vendas",
+          visitas:"visitas",
+          estoque_tabelas:"estoque_tabelas",
+          estoque_itens:"estoque_itens"
         };
         let ok=0, erros=0;
         
@@ -5944,9 +5968,19 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
           }
 
           const recursos={
-            clientes:"clientes", produtos:"mercadorias", mercadorias:"mercadorias",
-            pedidos:"pedidos", despesas:"despesas", lembretes:"lembretes",
-            rotas:"rotas", notas:"notas", visitas:"visitas",
+            clientes:"clientes", 
+            produtos:"mercadorias", 
+            mercadorias:"mercadorias",
+            pedidos:"pedidos", 
+            despesas:"despesas", 
+            lembretes:"lembretes",
+            rotas:"rotas", 
+            notas:"notas", 
+            visitas:"visitas",
+            // ✅ NOVO: Tabelas de vendas e estoque
+            vendas:"vendas",
+            estoque_tabelas:"estoque_tabelas",
+            estoque_itens:"estoque_itens"
           };
           let ok=0, erros=0;
 
@@ -6226,7 +6260,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
 
     // ── Sync multi-usuário ──────────────────────────────────────────────────────
     // Recursos que precisam de sync (excluir notas que são pessoais)
-    const SYNC_RECURSOS=["clientes","mercadorias","pedidos","despesas","lembretes","rotas"];
+    const SYNC_RECURSOS=["clientes","mercadorias","pedidos","despesas","lembretes","rotas","vendas","visitas","estoque_tabelas","estoque_itens"];
 
     // Flag global — true quando form está aberto (inclui file picker da câmera)
     window._svFormAberto=()=>{
