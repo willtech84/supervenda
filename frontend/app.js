@@ -4922,7 +4922,11 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
     document.getElementById("est-import-merc")?.addEventListener("click",()=>{
       if(!tabelaAtiva){toast("Selecione uma tabela primeiro.","warning");return;}
       const mercadorias=safeArray(state.cache.mercadorias);
-      if(!mercadorias.length){toast("Nenhuma mercadoria cadastrada.","warning");return;}
+      
+      // ✅ DEBUG: verificar se mercadorias estão carregadas
+      console.log("Mercadorias disponíveis:", mercadorias.length, mercadorias.slice(0,2));
+      
+      if(!mercadorias.length){toast("Nenhuma mercadoria cadastrada. Vá em Mercadorias > Criar mercadoria primeiro.","warning");return;}
 
       // ── Construir modal UMA VEZ — só a lista é atualizada ────────────────
       const mo=document.createElement("div");
@@ -4930,6 +4934,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
       mo.innerHTML=`
         <div id="est-merc-inner" style="background:var(--bg);border-radius:16px;padding:20px;width:100%;max-width:480px;max-height:85vh;overflow-y:auto;margin:auto;display:flex;flex-direction:column;gap:10px;">
           <div style="font-size:15px;font-weight:700;">📦 Importar de Mercadorias</div>
+          <div style="font-size:11px;color:var(--muted);">Total: ${mercadorias.length} produto${mercadorias.length!==1?"s":""}</div>
           <input id="est-merc-q" type="search" autocomplete="off" placeholder="Buscar produto ou código..."
             style="width:100%;padding:8px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;outline:none;"/>
           <div id="est-merc-lista" style="display:flex;flex-direction:column;gap:6px;max-height:52vh;overflow-y:auto;"></div>
@@ -4943,20 +4948,35 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
       function renderLista(){
         const q=(inp?.value||"").toLowerCase().trim();
         const itensAtuais=itensPorTabela[tabelaAtiva]||[];
+        
+        // ✅ Filtro melhorado com validação
         const filtradas=q
-          ?mercadorias.filter(m=>String(m.nome||"").toLowerCase().includes(q)||String(m.codigo||m.sku||"").toLowerCase().includes(q))
+          ?mercadorias.filter(m=>{
+            const nome=String(m.nome||m.produto||"").toLowerCase();
+            const codigo=String(m.codigo||m.sku||m.code||"").toLowerCase();
+            return nome.includes(q) || codigo.includes(q);
+          })
           :mercadorias;
 
+        console.log(`Busca por "${q}": ${filtradas.length} resultado${filtradas.length!==1?"s":""}`);
+
         if(!filtradas.length){
-          lista.innerHTML=`<div style="padding:16px;text-align:center;color:var(--muted);">Nenhum resultado.</div>`;
+          lista.innerHTML=`<div style="padding:16px;text-align:center;color:var(--muted);">
+            ${q?"Nenhum produto encontrado para \""+esc(q)+"\".":"Carregando mercadorias..."}
+          </div>`;
           return;
         }
+        
         lista.innerHTML=filtradas.map(m=>{
-          const jaTem=itensAtuais.some(i=>i.codigo&&String(i.codigo).toUpperCase()===String(m.codigo||m.sku||"").toUpperCase());
+          const jaTem=itensAtuais.some(i=>i.codigo&&String(i.codigo).toUpperCase()===String(m.codigo||m.sku||m.code||"").toUpperCase());
+          const nome=m.nome||m.produto||"(sem nome)";
+          const codigo=m.codigo||m.sku||m.code||"—";
+          const valor=Number(m.valor_venda||m.valorVenda||m.valor||0).toFixed(2);
+          
           return`<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${jaTem?"opacity:.5":""}">
             <div style="flex:1;min-width:0;">
-              <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.nome||"(sem nome)")}</div>
-              <div style="font-size:11px;color:var(--muted);">Cód: ${esc(m.codigo||m.sku||"—")} · R$ ${Number(m.valor_venda||m.valorVenda||0).toFixed(2)}</div>
+              <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nome)}</div>
+              <div style="font-size:11px;color:var(--muted);">Cód: ${esc(codigo)} · R$ ${valor}</div>
             </div>
             ${jaTem
               ?`<span style="font-size:11px;color:var(--amber);flex-shrink:0;">já importado</span>`
@@ -4977,11 +4997,11 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
                 method:"POST",
                 body:JSON.stringify({
                   tabela_id:tabelaAtiva,
-                  produto:String(m.nome||"").toUpperCase(),
-                  codigo:String(m.codigo||m.sku||"").toUpperCase(),
-                  quantidade:Number(m.estoque||m.estoqueAtual||0),
+                  produto:String(m.nome||m.produto||"").toUpperCase(),
+                  codigo:String(m.codigo||m.sku||m.code||"").toUpperCase(),
+                  quantidade:Number(m.estoque||m.estoqueAtual||m.quantidade||0),
                   quantidade_min:Number(m.estoqueMin||0),
-                  valor_unit:Number(m.valor_venda||m.valorVenda||0),
+                  valor_unit:Number(m.valor_venda||m.valorVenda||m.valor||0),
                   unidade:"UN"
                 })
               });
@@ -4989,18 +5009,19 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
                 if(!itensPorTabela[tabelaAtiva]) itensPorTabela[tabelaAtiva]=[];
                 itensPorTabela[tabelaAtiva].push({
                   id:novo.id,
-                  produto:String(m.nome||"").toUpperCase(),
-                  codigo:String(m.codigo||m.sku||"").toUpperCase(),
-                  quantidade:Number(m.estoque||m.estoqueAtual||0),
+                  produto:String(m.nome||m.produto||"").toUpperCase(),
+                  codigo:String(m.codigo||m.sku||m.code||"").toUpperCase(),
+                  quantidade:Number(m.estoque||m.estoqueAtual||m.quantidade||0),
                   quantidade_min:Number(m.estoqueMin||0),
-                  valor_unit:Number(m.valor_venda||m.valorVenda||0),
+                  valor_unit:Number(m.valor_venda||m.valorVenda||m.valor||0),
                   unidade:"UN",obs:"",bloqueado:0
                 });
                 renderTabelaItens();
-                toast(`✅ "${m.nome}" importado.`,"success");
-                renderLista(); // só recria a lista, o input fica intacto
+                toast(`✅ "${m.nome||m.produto}" importado.`,"success");
+                renderLista();
               }
             }catch(e){
+              console.error("Erro ao importar:",e);
               toast("Erro ao importar: "+(e?.message||""),"error");
               btn.disabled=false; btn.textContent="+ Adicionar";
             }
