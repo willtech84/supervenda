@@ -4530,9 +4530,6 @@
 
       const bloqueados=itens.filter(i=>Number(i.bloqueado));
 
-      // ✅ Detectar se é celular
-      const isMobile=window.innerWidth<768;
-
       cont.innerHTML=`
         <!-- Alerta de itens bloqueados -->
         ${bloqueados.length?`<div style="background:rgba(255,82,82,.08);border:1px solid rgba(255,82,82,.25);border-radius:10px;padding:12px 14px;margin-bottom:10px;">
@@ -4540,8 +4537,7 @@
           ${bloqueados.map(i=>`<div style="font-size:12px;color:var(--muted);margin-top:3px;">• <strong>${esc(i.produto||"")}</strong>${i.bloqueado_motivo?` — ${esc(i.bloqueado_motivo)}`:""} <span style="color:var(--red);">(por ${esc(i.bloqueado_por||"")})</span></div>`).join("")}
         </div>`:""}
 
-        <!-- DESKTOP: Tabela completa -->
-        ${!isMobile?`
+        <!-- Tabela de itens -->
         <div style="overflow-x:auto;border-radius:12px;border:1px solid var(--border);">
           <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:600px;">
             <thead>
@@ -4562,94 +4558,46 @@
                 const bloq=Number(item.bloqueado);
                 const baixoEst=Number(item.quantidade)<=Number(item.quantidade_min)&&Number(item.quantidade_min)>0;
                 const rowBg=bloq?"rgba(255,82,82,.04)":baixoEst?"rgba(255,179,0,.04)":"";
-                return\`<tr data-item-id="\${esc(item.id)}" style="border-bottom:1px solid var(--border);background:\${rowBg};\${bloq?"opacity:.75":""}\">
-                  \${isAdmin?\`<td style="padding:8px;text-align:center;cursor:grab;color:var(--muted);" class="drag-handle">⣿</td>\`:""}
+                return`<tr data-item-id="${esc(item.id)}" style="border-bottom:1px solid var(--border);background:${rowBg};${bloq?"opacity:.75":""}">
+                  ${isAdmin?`<td style="padding:8px;text-align:center;cursor:grab;color:var(--muted);" class="drag-handle">⣿</td>`:""}
                   <td style="padding:10px 12px;">
-                    <span style="font-family:monospace;font-size:12px;color:var(--muted);" class="edit-cell" data-field="codigo" data-id="\${esc(item.id)}">\${esc(item.codigo||"—")}</span>
+                    <span style="font-family:monospace;font-size:12px;color:var(--muted);" class="edit-cell" data-field="codigo" data-id="${esc(item.id)}">${esc(item.codigo||"—")}</span>
                   </td>
                   <td style="padding:10px 12px;font-weight:600;">
-                    <span class="edit-cell" data-field="produto" data-id="\${esc(item.id)}">\${esc(item.produto||"")}</span>
-                    \${bloq?\`<div style="font-size:10px;color:var(--red);">🔒 \${esc(item.bloqueado_motivo||"Reservado")}</div>\`:""}
+                    <span class="edit-cell" data-field="produto" data-id="${esc(item.id)}">${esc(item.produto||"")}</span>
+                    ${bloq?`<div style="font-size:10px;color:var(--red);">🔒 ${esc(item.bloqueado_motivo||"Reservado")}</div>`:""}
                   </td>
                   <td style="padding:10px 12px;text-align:center;">
-                    <span class="edit-cell edit-number" data-field="quantidade" data-id="\${esc(item.id)}" style="font-size:15px;font-weight:700;color:\${bloq?"var(--red)":baixoEst?"var(--amber)":"var(--green)"};\">\${Number(item.quantidade||0)}</span>
+                    <span class="edit-cell edit-number" data-field="quantidade" data-id="${esc(item.id)}" style="font-size:15px;font-weight:700;color:${bloq?"var(--red)":baixoEst?"var(--amber)":"var(--green)"};">${Number(item.quantidade||0)}</span>
                   </td>
                   <td style="padding:10px 12px;text-align:center;">
-                    <span class="edit-cell edit-number" data-field="valor_unit" data-id="\${esc(item.id)}" style="font-size:12px;color:var(--muted);">\${Number(item.valor_unit||0).toFixed(2)}</span>
+                    <span class="edit-cell edit-number" data-field="valor_unit" data-id="${esc(item.id)}" style="font-size:12px;color:var(--muted);">${Number(item.valor_unit||0).toFixed(2)}</span>
                   </td>
                   <td style="padding:10px 12px;text-align:center;">
-                    <span class="edit-cell" data-field="unidade" data-id="\${esc(item.id)}" style="font-size:12px;color:var(--muted);">\${esc(item.unidade||"UN")}</span>
+                    <span class="edit-cell" data-field="unidade" data-id="${esc(item.id)}" style="font-size:12px;color:var(--muted);">${esc(item.unidade||"UN")}</span>
                   </td>
                   <td style="padding:10px 12px;max-width:180px;">
-                    <span class="edit-cell" data-field="obs" data-id="\${esc(item.id)}" style="font-size:11px;color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="\${esc(item.obs||"")}">\${esc(item.obs||"—")}</span>
+                    <span class="edit-cell" data-field="obs" data-id="${esc(item.id)}" style="font-size:11px;color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(item.obs||"")}">${esc(item.obs||"—")}</span>
                   </td>
                   <td style="padding:10px 8px;text-align:center;">
-                    <button class="btn-bloquear" data-id="\${esc(item.id)}" data-bloq="\${bloq}" title="\${bloq?"Desbloquear":"Bloquear para venda"}"
-                      style="padding:5px 8px;border:none;border-radius:6px;cursor:pointer;font-size:12px;background:\${bloq?"rgba(0,230,118,.12)":"rgba(255,82,82,.1)"};color:\${bloq?"var(--green)":"var(--red)"};font-family:var(--font);">
-                      \${bloq?"🔓":"🔒"}
+                    <button class="btn-bloquear" data-id="${esc(item.id)}" data-bloq="${bloq}" title="${bloq?"Desbloquear":"Bloquear para venda"}"
+                      style="padding:5px 8px;border:none;border-radius:6px;cursor:pointer;font-size:12px;background:${bloq?"rgba(0,230,118,.12)":"rgba(255,82,82,.1)"};color:${bloq?"var(--green)":"var(--red)"};font-family:var(--font);">
+                      ${bloq?"🔓":"🔒"}
                     </button>
                   </td>
                   <td style="padding:10px 8px;text-align:center;">
-                    \${isAdmin?\`<button class="btn-del-item" data-id="\${esc(item.id)}" style="padding:5px 8px;border:none;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;">🗑️</button>\`:""}
+                    ${isAdmin?`<button class="btn-del-item" data-id="${esc(item.id)}" style="padding:5px 8px;border:none;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;">🗑️</button>`:""}
                   </td>
-                </tr>\`;
+                </tr>`;
               }).join("")}
             </tbody>
           </table>
         </div>
-        `:""}
-
-        <!-- MOBILE: Cards responsivos -->
-        ${isMobile?`
-        <div style="display:flex;flex-direction:column;gap:10px;" id="sv-est-cards">
-          ${filtrados.map(item=>{
-            const bloq=Number(item.bloqueado);
-            const baixoEst=Number(item.quantidade)<=Number(item.quantidade_min)&&Number(item.quantidade_min)>0;
-            const cardBg=bloq?"rgba(255,82,82,.08)":baixoEst?"rgba(255,179,0,.08)":"var(--bg2)";
-            return\`<div style="background:\${cardBg};border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px;\${bloq?"opacity:.75":""}" data-item-id="\${esc(item.id)}">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-                <div style="flex:1;">
-                  <div style="font-weight:700;font-size:14px;color:var(--text);">\${esc(item.produto||"")}</div>
-                  <div style="font-size:11px;color:var(--muted);">Cód: \${esc(item.codigo||"—")}</div>
-                </div>
-                <div style="display:flex;gap:4px;flex-shrink:0;">
-                  <button class="btn-bloquear" data-id="\${esc(item.id)}" data-bloq="\${bloq}" style="padding:4px 6px;border:none;border-radius:4px;cursor:pointer;font-size:13px;background:\${bloq?"rgba(0,230,118,.12)":"rgba(255,82,82,.1)"};color:\${bloq?"var(--green)":"var(--red)"};" title="\${bloq?"Desbloquear":"Bloquear"}">
-                    \${bloq?"🔓":"🔒"}
-                  </button>
-                  \${isAdmin?\`<button class="btn-del-item" data-id="\${esc(item.id)}" style="padding:4px 6px;border:none;border-radius:4px;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;">🗑️</button>\`:""}
-                </div>
-              </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
-                <div>
-                  <div style="color:var(--muted);font-size:10px;margin-bottom:2px;">Quantidade</div>
-                  <span class="edit-cell edit-number" data-field="quantidade" data-id="\${esc(item.id)}" style="font-weight:700;font-size:16px;color:\${bloq?"var(--red)":baixoEst?"var(--amber)":"var(--green)"};cursor:pointer;padding:2px 4px;border-radius:4px;">\${Number(item.quantidade||0)}</span>
-                </div>
-                <div>
-                  <div style="color:var(--muted);font-size:10px;margin-bottom:2px;">Val.Unit (R$)</div>
-                  <span class="edit-cell edit-number" data-field="valor_unit" data-id="\${esc(item.id)}" style="font-weight:600;font-size:14px;cursor:pointer;padding:2px 4px;border-radius:4px;">\${Number(item.valor_unit||0).toFixed(2)}</span>
-                </div>
-              </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
-                <div>
-                  <div style="color:var(--muted);font-size:10px;margin-bottom:2px;">Unidade</div>
-                  <span class="edit-cell" data-field="unidade" data-id="\${esc(item.id)}" style="cursor:pointer;padding:2px 4px;border-radius:4px;">\${esc(item.unidade||"UN")}</span>
-                </div>
-                <div>
-                  <div style="color:var(--muted);font-size:10px;margin-bottom:2px;">Qtd Mín</div>
-                  <span style="color:var(--muted);">\${Number(item.quantidade_min||0)}</span>
-                </div>
-              </div>
-              \${item.obs?\`<div style="font-size:11px;color:var(--muted);border-top:1px solid rgba(255,255,255,.1);padding-top:8px;margin-top:8px;">📝 \${esc(item.obs)}</div>\`:""}
-              \${bloq?\`<div style="font-size:10px;color:var(--red);">🔒 \${esc(item.bloqueado_motivo||"Reservado")}</div>\`:""}
-            </div>\`;
-          }).join("")}
-        </div>
-        `:""}
 
         <!-- Rodapé -->
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;font-size:12px;color:var(--muted);">
           <span>${filtrados.length} item${filtrados.length!==1?"ns":""}</span>
-          <span style="color:var(--amber);">⚠️ ${isMobile?"Toque para editar":"Clique para editar"}</span>
+          <span style="color:var(--amber);">⚠️ Clique em qualquer valor para editar inline</span>
         </div>`;
 
       bindTabelaEvents();
@@ -5025,20 +4973,15 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
           const codigo=m.codigo||m.sku||m.code||"—";
           const valor=Number(m.valor_venda||m.valorVenda||m.valor||0).toFixed(2);
           
-          return`<div style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${jaTem?"opacity:.5":""}">
+          return`<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${jaTem?"opacity:.5":""}">
             <div style="flex:1;min-width:0;">
-              <div style="font-size:12px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nome)}</div>
-              <div style="font-size:11px;color:var(--muted);display:flex;gap:8px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                <span>📦 ${esc(codigo)}</span>
-                <span>R$ ${valor}</span>
-              </div>
+              <div style="font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nome)}</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px;">📦 ${esc(codigo)} · R$ ${valor}</div>
             </div>
-            <div style="flex-shrink:0;display:flex;gap:4px;">
-              ${jaTem
-                ?`<span style="font-size:11px;color:var(--amber);padding:4px 8px;background:rgba(255,179,0,.1);border-radius:4px;white-space:nowrap;">✓ import.</span>`
-                :`<button class="btn btn-primary" style="font-size:11px;padding:6px 10px;flex-shrink:0;border:none;border-radius:4px;background:var(--green);color:white;cursor:pointer;font-family:var(--font);font-weight:600;" data-merc-id="${esc(m.id||m._id||"")}">+Add</button>`
-              }
-            </div>
+            ${jaTem
+              ?`<span style="font-size:10px;color:var(--amber);flex-shrink:0;white-space:nowrap;">✓ import.</span>`
+              :`<button class="btn btn-primary" style="font-size:11px;padding:6px 10px;flex-shrink:0;white-space:nowrap;" data-merc-id="${esc(m.id||m._id||"")}">+Add</button>`
+            }
           </div>`;
         }).join("");
 
@@ -5080,7 +5023,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
             }catch(e){
               console.error("Erro ao importar:",e);
               toast("Erro ao importar: "+(e?.message||""),"error");
-              btn.disabled=false; btn.textContent="+ Adicionar";
+              btn.disabled=false; btn.textContent="+Add";
             }
           });
         });
@@ -6330,19 +6273,11 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
       clearTimeout(_orientTimer);
       _orientTimer=setTimeout(()=>{
         renderNav(); // reconstrói bottom nav e more drawer para novo tamanho
-        // ✅ Re-renderizar estoque se estiver visível (muda table/cards)
-        if(state.route==="estoque") renderTabelaItens();
       },200);
     });
     // Também escutar orientationchange para Android mais antigo
-    screen.orientation?.addEventListener("change",()=>{ 
-      renderNav(); 
-      if(state.route==="estoque") setTimeout(renderTabelaItens, 100);
-    });
-    window.addEventListener("orientationchange",()=>{ 
-      setTimeout(renderNav,300);
-      if(state.route==="estoque") setTimeout(renderTabelaItens, 300);
-    });
+    screen.orientation?.addEventListener("change",()=>{ renderNav(); });
+    window.addEventListener("orientationchange",()=>{ setTimeout(renderNav,300); });
 
     // ── Sync multi-usuário ──────────────────────────────────────────────────────
     // Recursos que precisam de sync (excluir notas que são pessoais)
