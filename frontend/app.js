@@ -5025,15 +5025,20 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
           const codigo=m.codigo||m.sku||m.code||"—";
           const valor=Number(m.valor_venda||m.valorVenda||m.valor||0).toFixed(2);
           
-          return`<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${jaTem?"opacity:.5":""}">
+          return`<div style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${jaTem?"opacity:.5":""}">
             <div style="flex:1;min-width:0;">
-              <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nome)}</div>
-              <div style="font-size:11px;color:var(--muted);">Cód: ${esc(codigo)} · R$ ${valor}</div>
+              <div style="font-size:12px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nome)}</div>
+              <div style="font-size:11px;color:var(--muted);display:flex;gap:8px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                <span>📦 ${esc(codigo)}</span>
+                <span>R$ ${valor}</span>
+              </div>
             </div>
-            ${jaTem
-              ?`<span style="font-size:11px;color:var(--amber);flex-shrink:0;">já importado</span>`
-              :`<button class="btn btn-primary" style="font-size:12px;padding:5px 10px;flex-shrink:0;" data-merc-id="${esc(m.id||m._id||"")}">+ Adicionar</button>`
-            }
+            <div style="flex-shrink:0;display:flex;gap:4px;">
+              ${jaTem
+                ?`<span style="font-size:11px;color:var(--amber);padding:4px 8px;background:rgba(255,179,0,.1);border-radius:4px;white-space:nowrap;">✓ import.</span>`
+                :`<button class="btn btn-primary" style="font-size:11px;padding:6px 10px;flex-shrink:0;border:none;border-radius:4px;background:var(--green);color:white;cursor:pointer;font-family:var(--font);font-weight:600;" data-merc-id="${esc(m.id||m._id||"")}">+Add</button>`
+              }
+            </div>
           </div>`;
         }).join("");
 
