@@ -4973,15 +4973,16 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
           const codigo=m.codigo||m.sku||m.code||"—";
           const valor=Number(m.valor_venda||m.valorVenda||m.valor||0).toFixed(2);
           
-          return`<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${jaTem?"opacity:.5":""}">
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nome)}</div>
-              <div style="font-size:11px;color:var(--muted);margin-top:2px;">📦 ${esc(codigo)} · R$ ${valor}</div>
+          if(jaTem) return`<div style="padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;opacity:.5;font-size:12px;color:var(--amber);">✓ ${esc(nome)} (cód: ${esc(codigo)}) — já importado</div>`;
+          
+          return`<div style="padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px;">
+              <div style="flex:1;">
+                <div style="font-size:13px;font-weight:700;">${esc(nome)}</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px;">📦 ${esc(codigo)} | R$ ${valor}</div>
+              </div>
+              <button class="btn btn-primary" style="font-size:11px;padding:6px 12px;white-space:nowrap;border:none;border-radius:4px;background:var(--green);color:white;cursor:pointer;font-family:var(--font);font-weight:600;" data-merc-id="${esc(m.id||m._id||"")}">+Add</button>
             </div>
-            ${jaTem
-              ?`<span style="font-size:10px;color:var(--amber);flex-shrink:0;white-space:nowrap;">✓ import.</span>`
-              :`<button class="btn btn-primary" style="font-size:11px;padding:6px 10px;flex-shrink:0;white-space:nowrap;" data-merc-id="${esc(m.id||m._id||"")}">+Add</button>`
-            }
           </div>`;
         }).join("");
 
