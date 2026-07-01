@@ -14,20 +14,7 @@
 
   const state = {
     route: "dashboard",
-    cache: { 
-      clientes:[], 
-      mercadorias:[], 
-      pedidos:[], 
-      rotas:[], 
-      despesas:[], 
-      lembretes:[], 
-      notas:[],
-      // ✅ NOVO: Cache para vendas e estoque
-      vendas:[],
-      visitas:[],
-      estoque_tabelas:[],
-      estoque_itens:[]
-    },
+    cache: { clientes:[], mercadorias:[], pedidos:[], rotas:[], despesas:[], lembretes:[], notas:[] },
     ui: { search: "" },
     lembretesPopupShown: false,
   };
@@ -53,26 +40,8 @@
   function getId(item) { return item?.id??item?._id??item?.codigo??""; }
   function safeArray(v) { return Array.isArray(v)?v:[]; }
   function downloadJson(fname,data) {
-    try {
-      // Converter em chunks para não travar o navegador em datasets grandes
-      const json=JSON.stringify(data,null,2);
-      const blob=new Blob([json],{type:"application/json"});
-      // Se >10MB, dar warning
-      if(blob.size>10*1024*1024){
-        console.warn(`⚠️ Arquivo grande: ${(blob.size/1024/1024).toFixed(1)}MB`);
-      }
-      const url=URL.createObjectURL(blob);
-      const a=document.createElement("a");
-      a.href=url;
-      a.download=fname;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(()=>URL.revokeObjectURL(url),2000);
-    }catch(e){
-      toast("Erro ao gerar arquivo: "+e.message,"error");
-      console.error(e);
-    }
+    const a=Object.assign(document.createElement("a"),{href:URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json"})),download:fname});
+    a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
   }
 
   // Toast
@@ -321,9 +290,8 @@
       clientes:"clientes", mercadorias:"mercadorias", pedidos:"pedidos",
       rotas:"rotas", despesas:"despesas", lembretes:"lembretes",
       notas:"anotacoes",  // recurso da API "notas" → permissão chave "anotacoes"
-      vendas:"vendas", visitas:"visitas", estoque_tabelas:"estoque", estoque_itens:"estoque"
     };
-    const todos=["clientes","mercadorias","pedidos","rotas","despesas","lembretes","notas","vendas","visitas","estoque_tabelas","estoque_itens"];
+    const todos=["clientes","mercadorias","pedidos","rotas","despesas","lembretes","notas"];
     // Filtrar só os que o usuário tem permissão de ver
     const permitidos=todos.filter(r=>{
       if(isAdmin) return true;
@@ -4706,7 +4674,6 @@
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
             ${isAdmin?`<button id="est-nova-tabela" class="btn btn-secondary" style="font-size:12px;">➕ Nova tabela</button><button id="est-del-tabela" class="btn btn-secondary" style="font-size:12px;color:var(--red);">🗑️ Deletar tabela</button>`:""}
             <button id="est-add-item" class="btn btn-primary" style="width:auto;font-size:13px;">+ Adicionar item</button>
-            <button id="est-export-merc" class="btn btn-secondary" style="font-size:12px;" title="Sincronizar estoque com mercadorias">💾 Sincronizar Mercadorias</button>
             <button id="est-import-merc" class="btn btn-secondary" style="font-size:12px;" title="Importar item de Mercadorias">📦 De Mercadoria</button>
             <button id="est-import-excel" class="btn btn-secondary" style="font-size:12px;" title="Importar Excel">📥 Excel</button>
             <button id="est-export-excel" class="btn btn-secondary" style="font-size:12px;" title="Exportar Excel">📤 Excel</button>
@@ -4792,78 +4759,26 @@
       },"Criando tabela...");
     });
 
-    // Botão adicionar item — SIMPLIFICADO: só nome + quantidade
+    // Botão adicionar item
     document.getElementById("est-add-item")?.addEventListener("click",async()=>{
       if(!tabelaAtiva){toast("Selecione ou crie uma tabela primeiro.","warning");return;}
-      
-      // Modal simplificado: só nome + quantidade
-      const mo=document.createElement("div");
-      mo.style.cssText="position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:20px;";
-      mo.innerHTML=`
-        <div style="background:var(--bg);border-radius:16px;padding:24px;width:100%;max-width:400px;display:flex;flex-direction:column;gap:12px;">
-          <div style="font-size:15px;font-weight:700;">➕ Novo item no Estoque</div>
-          <input id="est-novo-nome" type="text" placeholder="Nome do produto" 
-            style="width:100%;padding:10px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;"/>
-          <input id="est-novo-qtd" type="number" placeholder="Quantidade" value="0" min="0"
-            style="width:100%;padding:10px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;"/>
-          <input id="est-novo-codigo" type="text" placeholder="Código (opcional)" 
-            style="width:100%;padding:10px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;"/>
-          <div style="display:flex;gap:8px;">
-            <button id="est-novo-ok" class="btn btn-primary" style="flex:1;">Salvar</button>
-            <button id="est-novo-cancel" class="btn btn-ghost" style="flex:1;">Cancelar</button>
-          </div>
-        </div>`;
-      document.body.appendChild(mo);
-      
-      const nomInp=mo.querySelector("#est-novo-nome");
-      const qtdInp=mo.querySelector("#est-novo-qtd");
-      const codInp=mo.querySelector("#est-novo-codigo");
-      
-      const fechar=()=>mo.remove();
-      mo.querySelector("#est-novo-cancel")?.addEventListener("click",fechar);
-      mo.querySelector("#est-novo-ok")?.addEventListener("click",async()=>{
-        const nome=(nomInp?.value||"").trim();
-        if(!nome){toast("Informe o nome do produto.","warning");return;}
-        const qtd=Number(qtdInp?.value||0);
-        const cod=(codInp?.value||"").trim().toUpperCase();
-        
-        fechar();
-        await runWithUi(async()=>{
-          const novo=await DB.request("/api/estoque-itens",{
-            method:"POST",
-            body:JSON.stringify({
-              tabela_id:tabelaAtiva,
-              produto:nome.toUpperCase(),
-              codigo:cod||"",
-              quantidade:qtd,
-              quantidade_min:0,
-              unidade:"UN"
-            })
-          });
-          if(novo?.id){
-            if(!itensPorTabela[tabelaAtiva]) itensPorTabela[tabelaAtiva]=[];
-            itensPorTabela[tabelaAtiva].push({
-              id:novo.id,
-              produto:nome.toUpperCase(),
-              codigo:cod,
-              quantidade:qtd,
-              quantidade_min:0,
-              unidade:"UN",
-              obs:"",
-              bloqueado:0,
-              valor_unit:0
-            });
-            renderTabelaItens();
-            toast(`✅ "${nome}" adicionado.`,"success");
-          }
-        },"Adicionando...");
-      });
-      
-      setTimeout(()=>nomInp?.focus(),80);
-      nomInp?.addEventListener("keydown",e=>{
-        if(e.key==="Enter") mo.querySelector("#est-novo-ok")?.click();
-        else if(e.key==="Escape") fechar();
-      });
+      const produto=prompt("Nome do produto:");
+      if(!produto) return;
+      const codigo=prompt("Código (opcional):")||"";
+      const qtd=Number(prompt("Quantidade inicial:","0")||0);
+      const qtdMin=Number(prompt("Quantidade mínima (alerta estoque baixo):","0")||0);
+      await runWithUi(async()=>{
+        const novo=await DB.request("/api/estoque-itens",{
+          method:"POST",
+          body:JSON.stringify({tabela_id:tabelaAtiva,produto:produto.toUpperCase(),codigo:codigo.toUpperCase(),quantidade:qtd,quantidade_min:qtdMin,unidade:"UN"})
+        });
+        if(novo?.id){
+          if(!itensPorTabela[tabelaAtiva]) itensPorTabela[tabelaAtiva]=[];
+          itensPorTabela[tabelaAtiva].push({id:novo.id,produto:produto.toUpperCase(),codigo:codigo.toUpperCase(),quantidade:qtd,quantidade_min:qtdMin,unidade:"UN",obs:"",bloqueado:0});
+          renderTabelaItens();
+          toast(`✅ "${produto}" adicionado.`,"success");
+        }
+      },"Adicionando...");
     });
 
     // Busca
@@ -4922,11 +4837,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
     document.getElementById("est-import-merc")?.addEventListener("click",()=>{
       if(!tabelaAtiva){toast("Selecione uma tabela primeiro.","warning");return;}
       const mercadorias=safeArray(state.cache.mercadorias);
-      
-      // ✅ DEBUG: verificar se mercadorias estão carregadas
-      console.log("Mercadorias disponíveis:", mercadorias.length, mercadorias.slice(0,2));
-      
-      if(!mercadorias.length){toast("Nenhuma mercadoria cadastrada. Vá em Mercadorias > Criar mercadoria primeiro.","warning");return;}
+      if(!mercadorias.length){toast("Nenhuma mercadoria cadastrada.","warning");return;}
 
       // ── Construir modal UMA VEZ — só a lista é atualizada ────────────────
       const mo=document.createElement("div");
@@ -4934,7 +4845,6 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
       mo.innerHTML=`
         <div id="est-merc-inner" style="background:var(--bg);border-radius:16px;padding:20px;width:100%;max-width:480px;max-height:85vh;overflow-y:auto;margin:auto;display:flex;flex-direction:column;gap:10px;">
           <div style="font-size:15px;font-weight:700;">📦 Importar de Mercadorias</div>
-          <div style="font-size:11px;color:var(--muted);">Total: ${mercadorias.length} produto${mercadorias.length!==1?"s":""}</div>
           <input id="est-merc-q" type="search" autocomplete="off" placeholder="Buscar produto ou código..."
             style="width:100%;padding:8px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;outline:none;"/>
           <div id="est-merc-lista" style="display:flex;flex-direction:column;gap:6px;max-height:52vh;overflow-y:auto;"></div>
@@ -4948,41 +4858,25 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
       function renderLista(){
         const q=(inp?.value||"").toLowerCase().trim();
         const itensAtuais=itensPorTabela[tabelaAtiva]||[];
-        
-        // ✅ Filtro melhorado com validação
         const filtradas=q
-          ?mercadorias.filter(m=>{
-            const nome=String(m.nome||m.produto||"").toLowerCase();
-            const codigo=String(m.codigo||m.sku||m.code||"").toLowerCase();
-            return nome.includes(q) || codigo.includes(q);
-          })
+          ?mercadorias.filter(m=>String(m.nome||"").toLowerCase().includes(q)||String(m.codigo||m.sku||"").toLowerCase().includes(q))
           :mercadorias;
 
-        console.log(`Busca por "${q}": ${filtradas.length} resultado${filtradas.length!==1?"s":""}`);
-
         if(!filtradas.length){
-          lista.innerHTML=`<div style="padding:16px;text-align:center;color:var(--muted);">
-            ${q?"Nenhum produto encontrado para \""+esc(q)+"\".":"Carregando mercadorias..."}
-          </div>`;
+          lista.innerHTML=`<div style="padding:16px;text-align:center;color:var(--muted);">Nenhum resultado.</div>`;
           return;
         }
-        
         lista.innerHTML=filtradas.map(m=>{
-          const jaTem=itensAtuais.some(i=>i.codigo&&String(i.codigo).toUpperCase()===String(m.codigo||m.sku||m.code||"").toUpperCase());
-          const nome=m.nome||m.produto||"(sem nome)";
-          const codigo=m.codigo||m.sku||m.code||"—";
-          const valor=Number(m.valor_venda||m.valorVenda||m.valor||0).toFixed(2);
-          
-          if(jaTem) return`<div style="padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;opacity:.5;font-size:12px;color:var(--amber);">✓ ${esc(nome)} (cód: ${esc(codigo)}) — já importado</div>`;
-          
-          return`<div style="padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px;">
-              <div style="flex:1;">
-                <div style="font-size:13px;font-weight:700;">${esc(nome)}</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:2px;">📦 ${esc(codigo)} | R$ ${valor}</div>
-              </div>
-              <button class="btn btn-primary" style="font-size:11px;padding:6px 12px;white-space:nowrap;border:none;border-radius:4px;background:var(--green);color:white;cursor:pointer;font-family:var(--font);font-weight:600;" data-merc-id="${esc(m.id||m._id||"")}">+Add</button>
+          const jaTem=itensAtuais.some(i=>i.codigo&&String(i.codigo).toUpperCase()===String(m.codigo||m.sku||"").toUpperCase());
+          return`<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${jaTem?"opacity:.5":""}">
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.nome||"(sem nome)")}</div>
+              <div style="font-size:11px;color:var(--muted);">Cód: ${esc(m.codigo||m.sku||"—")} · R$ ${Number(m.valor_venda||m.valorVenda||0).toFixed(2)}</div>
             </div>
+            ${jaTem
+              ?`<span style="font-size:11px;color:var(--amber);flex-shrink:0;">já importado</span>`
+              :`<button class="btn btn-primary" style="font-size:12px;padding:5px 10px;flex-shrink:0;" data-merc-id="${esc(m.id||m._id||"")}">+ Adicionar</button>`
+            }
           </div>`;
         }).join("");
 
@@ -4998,11 +4892,11 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
                 method:"POST",
                 body:JSON.stringify({
                   tabela_id:tabelaAtiva,
-                  produto:String(m.nome||m.produto||"").toUpperCase(),
-                  codigo:String(m.codigo||m.sku||m.code||"").toUpperCase(),
-                  quantidade:Number(m.estoque||m.estoqueAtual||m.quantidade||0),
+                  produto:String(m.nome||"").toUpperCase(),
+                  codigo:String(m.codigo||m.sku||"").toUpperCase(),
+                  quantidade:Number(m.estoque||m.estoqueAtual||0),
                   quantidade_min:Number(m.estoqueMin||0),
-                  valor_unit:Number(m.valor_venda||m.valorVenda||m.valor||0),
+                  valor_unit:Number(m.valor_venda||m.valorVenda||0),
                   unidade:"UN"
                 })
               });
@@ -5010,21 +4904,20 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
                 if(!itensPorTabela[tabelaAtiva]) itensPorTabela[tabelaAtiva]=[];
                 itensPorTabela[tabelaAtiva].push({
                   id:novo.id,
-                  produto:String(m.nome||m.produto||"").toUpperCase(),
-                  codigo:String(m.codigo||m.sku||m.code||"").toUpperCase(),
-                  quantidade:Number(m.estoque||m.estoqueAtual||m.quantidade||0),
+                  produto:String(m.nome||"").toUpperCase(),
+                  codigo:String(m.codigo||m.sku||"").toUpperCase(),
+                  quantidade:Number(m.estoque||m.estoqueAtual||0),
                   quantidade_min:Number(m.estoqueMin||0),
-                  valor_unit:Number(m.valor_venda||m.valorVenda||m.valor||0),
+                  valor_unit:Number(m.valor_venda||m.valorVenda||0),
                   unidade:"UN",obs:"",bloqueado:0
                 });
                 renderTabelaItens();
-                toast(`✅ "${m.nome||m.produto}" importado.`,"success");
-                renderLista();
+                toast(`✅ "${m.nome}" importado.`,"success");
+                renderLista(); // só recria a lista, o input fica intacto
               }
             }catch(e){
-              console.error("Erro ao importar:",e);
               toast("Erro ao importar: "+(e?.message||""),"error");
-              btn.disabled=false; btn.textContent="+Add";
+              btn.disabled=false; btn.textContent="+ Adicionar";
             }
           });
         });
@@ -5037,58 +4930,6 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
 
       renderLista();
       setTimeout(()=>inp?.focus(),80);
-    });
-
-    // ── Sincronizar Estoque → Mercadorias ────────────────────────────────────
-    document.getElementById("est-export-merc")?.addEventListener("click",async()=>{
-      const itens=itensPorTabela[tabelaAtiva]||[];
-      if(!itens.length){toast("Nenhum item no estoque para sincronizar.","warning");return;}
-      
-      if(!confirm(`✅ Sincronizar ${itens.length} item${itens.length!==1?"ns":""} do estoque para Mercadorias?\n\nProdutos com mesmo código serão atualizados, outros serão criados novos.`)) return;
-      
-      await runWithUi(async()=>{
-        let criados=0, atualizados=0, erros=0;
-        const mercadorias=safeArray(state.cache.mercadorias);
-        
-        for(const item of itens){
-          try{
-            // Verificar se já existe por código
-            const existe=mercadorias.find(m=>{
-              const mCod=String(m.codigo||m.sku||"").toUpperCase();
-              const iCod=String(item.codigo||"").toUpperCase();
-              return mCod&&iCod&&mCod===iCod;
-            });
-            
-            const payload={
-              nome:item.produto||"",
-              codigo:item.codigo||"",
-              estoque:Number(item.quantidade||0),
-              estoqueMin:Number(item.quantidade_min||0),
-              valor_venda:Number(item.valor_unit||0),
-              descricao:item.obs||""
-            };
-            
-            if(existe){
-              // Atualizar existente
-              await DB.update("mercadorias",existe.id,payload);
-              atualizados++;
-            }else{
-              // Criar novo
-              await DB.create("mercadorias",payload);
-              criados++;
-              mercadorias.push(payload);
-            }
-          }catch(e){
-            console.error("Erro ao sincronizar:",e);
-            erros++;
-          }
-        }
-        
-        await preloadAll();
-        renderCurrent();
-        const msg=`✅ Sincronizado: ${criados} novo${criados!==1?"s":""}, ${atualizados} atualizado${atualizados!==1?"s":""}${erros?`, ${erros} erro${erros!==1?"s":""}`:""}`;
-        toast(msg,erros?"warning":"success",6000);
-      },"Sincronizando...");
     });
 
     // ── Exportar Excel ──────────────────────────────────────────────────────
@@ -5920,51 +5761,29 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
         if(!tables||typeof tables!=="object"){ toast("Formato de backup inválido.","error"); return; }
 
         const recursos={
-          clientes:"clientes", 
-          produtos:"mercadorias", 
-          pedidos:"pedidos",
-          despesas:"despesas", 
-          lembretes:"lembretes", 
-          rotas:"rotas", 
-          notas:"notas",
-          // ✅ NOVO: Tabelas de vendas e estoque
-          vendas:"vendas",
-          visitas:"visitas",
-          estoque_tabelas:"estoque_tabelas",
-          estoque_itens:"estoque_itens"
+          clientes:"clientes", produtos:"mercadorias", pedidos:"pedidos",
+          despesas:"despesas", lembretes:"lembretes", rotas:"rotas", notas:"notas",
         };
         let ok=0, erros=0;
-        
-        // Processar em paralelo (batch) para não travar o navegador
-        const promises=[];
         for(const [tabela,resource] of Object.entries(recursos)){
           const rows=safeArray(tables[tabela]||tables[resource]);
           if(!rows.length) continue;
-          
-          // Processar em chunks de 10 para não sobrecarregar
-          for(let i=0;i<rows.length;i+=10){
-            const chunk=rows.slice(i,i+10);
-            const chunkPromise=(async()=>{
-              for(const row of chunk){
-                try{
-                  const payload={...row};
-                  delete payload.vendor_id; delete payload.updated_at; delete payload.created_at;
-                  await DB.create(resource,payload);
-                  ok++;
-                }catch(e2){
-                  try{
-                    const id=row.id||row._id;
-                    if(id){ await DB.update(resource,id,row); ok++; }
-                  }catch{ erros++; }
-                }
-              }
-            })();
-            promises.push(chunkPromise);
+          for(const row of rows){
+            try{
+              // Normalizar campos comuns
+              const payload={...row};
+              delete payload.vendor_id; delete payload.updated_at; delete payload.created_at;
+              await DB.create(resource,payload);
+              ok++;
+            }catch(e2){
+              // Se já existe (conflito de ID), tentar update
+              try{
+                const id=row.id||row._id;
+                if(id){ await DB.update(resource,id,row); ok++; }
+              }catch{ erros++; }
+            }
           }
         }
-        
-        // Aguardar todos em paralelo
-        await Promise.all(promises);
         await preloadAll();
         renderCurrent();
         toast(`✅ Restore concluído: ${ok} registros restaurados${erros?` · ${erros} erros`:""}`,ok?"success":"warning",6000);
@@ -5972,76 +5791,63 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
     });
     $("#sidebar-logout-btn")?.addEventListener("click",doLogout);
 
-    // ── Importar backup direto da Cloudflare D1 (sem arquivo) ──────────────────
-    $("#sidebar-cf-backup-btn")?.addEventListener("click",async()=>{
-      if(!confirm("⚠️ Importar dados direto do Cloudflare D1.\n\nIsso vai CRIAR novos registros (não sobrescreve IDs existentes).\n\nDeseja continuar?")) return;
+    // ── Importar backup do Cloudflare ──────────────────────────────────────
+    $("#sidebar-cf-backup-btn")?.addEventListener("click",()=>$("#sidebar-cf-backup-file")?.click());
+    $("#sidebar-cf-backup-file")?.addEventListener("change",async e=>{
+      const file=e.target.files[0]; if(!file) return;
+      e.target.value="";
+      if(!confirm("⚠️ Importar backup do Cloudflare D1.\n\nIsso vai CRIAR novos registros (não sobrescreve IDs existentes).\n\nDeseja continuar?")) return;
       await runWithUi(async()=>{
-        try{
-          // Buscar backup direto da API
-          const bk=await DB.request("/api/backup",{method:"GET"});
-          if(!bk){ toast("Não foi possível obter dados do Cloudflare.","error"); return; }
+        const text=await file.text();
+        let bk;
+        try{ bk=JSON.parse(text); }
+        catch{ toast("Arquivo inválido.","error"); return; }
+        // Formato D1 export: {results:[{type:'table',name:...,columns:[],rows:[[],...]},...]}
+        // ou formato backup supervenda: {data:{tables:{...}}}
+        // ou array direto de objetos
+        const tables=bk?.results||bk?.data?.tables||bk?.tables||bk?.data||bk;
+        if(!tables){ toast("Formato de backup do Cloudflare não reconhecido.","error"); return; }
 
-          // Suportar ambos os formatos: {data:{tables:{...}}} ou {tables:{...}}
-          const tables=bk?.data?.tables||bk?.tables||bk?.data||null;
-          if(!tables||typeof tables!=="object"){ 
-            toast("Formato de dados inválido.","error"); 
-            console.warn("Dados recebidos:",bk);
-            return; 
+        const recursos={
+          clientes:"clientes", produtos:"mercadorias", mercadorias:"mercadorias",
+          pedidos:"pedidos", despesas:"despesas", lembretes:"lembretes",
+          rotas:"rotas", notas:"notas", visitas:"visitas",
+        };
+        let ok=0, erros=0;
+
+        async function importarRows(rows, resource){
+          for(const row of rows){
+            try{
+              const payload={...row};
+              delete payload.vendor_id; delete payload.updated_at; delete payload.created_at; delete payload.owner_id;
+              await DB.create(resource,payload); ok++;
+            }catch(e2){
+              try{ const id=row.id||row._id; if(id){await DB.update(resource,id,row);ok++;} }
+              catch{ erros++; }
+            }
           }
+        }
 
-          const recursos={
-            clientes:"clientes", 
-            produtos:"mercadorias", 
-            mercadorias:"mercadorias",
-            pedidos:"pedidos", 
-            despesas:"despesas", 
-            lembretes:"lembretes",
-            rotas:"rotas", 
-            notas:"notas", 
-            visitas:"visitas",
-            // ✅ NOVO: Tabelas de vendas e estoque
-            vendas:"vendas",
-            estoque_tabelas:"estoque_tabelas",
-            estoque_itens:"estoque_itens"
-          };
-          let ok=0, erros=0;
-
-          // Processar em paralelo com chunks
-          const promises=[];
+        if(Array.isArray(tables)){
+          // Formato D1: array de {type,name,columns,rows}
+          for(const tbl of tables){
+            if(tbl.type!=="table"||!tbl.name||!Array.isArray(tbl.rows)) continue;
+            const resource=recursos[tbl.name];
+            if(!resource) continue;
+            const cols=tbl.columns||[];
+            const objRows=tbl.rows.map(r=>Object.fromEntries(cols.map((c,i)=>[c,r[i]])));
+            await importarRows(objRows,resource);
+          }
+        } else if(typeof tables==="object"){
           for(const [tabela,resource] of Object.entries(recursos)){
             const rows=safeArray(tables[tabela]||tables[resource]);
             if(!rows.length) continue;
-            
-            for(let i=0;i<rows.length;i+=10){
-              const chunk=rows.slice(i,i+10);
-              const chunkPromise=(async()=>{
-                for(const row of chunk){
-                  try{
-                    const payload={...row};
-                    delete payload.vendor_id; delete payload.updated_at; delete payload.created_at; delete payload.owner_id;
-                    await DB.create(resource,payload); 
-                    ok++;
-                  }catch(e2){
-                    try{ 
-                      const id=row.id||row._id; 
-                      if(id){await DB.update(resource,id,row);ok++;} 
-                    }catch{ erros++; }
-                  }
-                }
-              })();
-              promises.push(chunkPromise);
-            }
+            await importarRows(rows,resource);
           }
-
-          await Promise.all(promises);
-          await preloadAll(); 
-          renderCurrent();
-          toast(`✅ Cloudflare importado: ${ok} registros${erros?` · ${erros} erros`:""}.`,ok?"success":"warning",6000);
-        }catch(e){
-          toast("Erro ao importar: "+(e?.message||"Verifique se você está logado"),"error");
-          console.error(e);
         }
-      },"Importando do Cloudflare...");
+        await preloadAll(); renderCurrent();
+        toast(`✅ Backup Cloudflare importado: ${ok} registros${erros?` · ${erros} erros`:""}.`,ok?"success":"warning",6000);
+      },"Importando backup Cloudflare...");
     });
 
     // Modo claro/escuro
@@ -6282,7 +6088,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
 
     // ── Sync multi-usuário ──────────────────────────────────────────────────────
     // Recursos que precisam de sync (excluir notas que são pessoais)
-    const SYNC_RECURSOS=["clientes","mercadorias","pedidos","despesas","lembretes","rotas","vendas","visitas","estoque_tabelas","estoque_itens"];
+    const SYNC_RECURSOS=["clientes","mercadorias","pedidos","despesas","lembretes","rotas"];
 
     // Flag global — true quando form está aberto (inclui file picker da câmera)
     window._svFormAberto=()=>{
