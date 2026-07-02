@@ -2,7 +2,7 @@
 // Altere API_BASE para a URL do seu Cloudflare Worker
 // config.js
 window.CONFIG = {
-  API_BASE: "supervenda.krasinskyekuroli.workers.dev",
+  API_BASE: "vendas-externas-api.krasinskyekuroli.workers.dev",
   STORAGE_KEYS: {
     TOKEN: "supervenda_token",
     USER: "supervenda_user",
