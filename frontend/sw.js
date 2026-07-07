@@ -1,15 +1,25 @@
-// SuperVenda Service Worker — Offline First v2
-const CACHE_NAME = 'supervenda-v2';
+// SuperVenda Service Worker — Offline First v3
+const CACHE_NAME = 'supervenda-v3';
 const OFFLINE_QUEUE_KEY = 'sv_offline_queue';
 
 // Arquivos para cachear (shell do app)
 const CACHE_ASSETS = [
   '/',
   '/index.html',
+  '/config.js',
   '/app.js',
   '/db.js',
   '/manifest.json',
 ];
+
+// Arquivos "core" que definem config/lógica do app: sempre buscar a versão
+// mais nova da rede primeiro (evita ficar preso em API_BASE antigo em cache).
+// Só usa cache se estiver offline.
+const NETWORK_FIRST_FILES = ['/index.html', '/config.js', '/app.js', '/db.js', '/'];
+
+function isNetworkFirstAsset(url) {
+  return NETWORK_FIRST_FILES.includes(url.pathname);
+}
 
 // ── Install: cachear shell do app ────────────────────────────────────────────
 self.addEventListener('install', e => {
@@ -84,7 +94,22 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Assets locais: cache-first com network fallback
+  // Assets "core" (config/app/db/index): network-first, cache só como fallback offline.
+  // Isso evita ficar preso em uma API_BASE antiga se o SW já tiver cacheado antes.
+  if (isLocalAsset(url) && isNetworkFirstAsset(url)) {
+    e.respondWith(
+      fetch(e.request).then(resp => {
+        if (resp && resp.status === 200 && e.request.method === 'GET') {
+          const toCache = resp.clone();
+          caches.open(CACHE_NAME).then(c => c.put(e.request, toCache));
+        }
+        return resp;
+      }).catch(() => caches.match(e.request).then(cached => cached || caches.match('/index.html')))
+    );
+    return;
+  }
+
+  // Demais assets locais (ícones, css, etc): cache-first com network fallback
   if (isLocalAsset(url)) {
     e.respondWith(
       caches.match(e.request).then(cached => {
