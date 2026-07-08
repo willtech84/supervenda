@@ -348,16 +348,29 @@ export default {
 
       /** =================== BACKUP =================== **/
       if (p[1] === "backup") {
+        // Lista backups do R2 (deve vir antes do GET genérico abaixo)
+        if (req.method === "GET" && p[2] === "list") {
+          if (!env.BACKUPS) return json({ backups: [] });
+          const list = await env.BACKUPS.list();
+          const backups = (list.objects || [])
+            .map((o: any) => ({ key: o.key, size: o.size, uploaded: o.uploaded }))
+            .sort((a: any, b: any) => String(b.key).localeCompare(String(a.key)));
+          return json({ backups });
+        }
+        // Baixa o conteúdo de um backup específico do R2
+        if (req.method === "GET" && p[2] === "download") {
+          if (!env.BACKUPS) return bad("Armazenamento R2 não configurado.", 503);
+          const key = url.searchParams.get("key") || "";
+          if (!key) return bad("Parâmetro 'key' é obrigatório.", 400);
+          const obj = await env.BACKUPS.get(key);
+          if (!obj) return bad("Backup não encontrado.", 404);
+          const text = await obj.text();
+          return json(JSON.parse(text));
+        }
         if (req.method === "GET") {
           const payload = await buildBackupPayload(env);
           const r2key = await saveBackupToR2(env);
           return json({ ...payload, r2key: r2key || null });
-        }
-        // Lista backups do R2
-        if (req.method === "GET" && p[2] === "list") {
-          if (!env.BACKUPS) return json({ backups: [] });
-          const list = await env.BACKUPS.list();
-          return json({ backups: (list.objects || []).map((o: any) => ({ key: o.key, size: o.size, uploaded: o.uploaded })) });
         }
       }
 
