@@ -135,6 +135,22 @@ function parseJSONField<T>(v: unknown, fallback: T): T {
   }
 }
 
+// Desfaz JSON serializado múltiplas vezes (bug de dupla-serialização em itens/tags/paradas).
+// Ex: '"[{\\"a\\":1}]"' (string dentro de string) vira [{a:1}] de verdade.
+function deepParseJSONField<T>(v: unknown, fallback: T): T {
+  let cur: any = v;
+  let loops = 0;
+  try {
+    while (typeof cur === "string" && cur.trim() !== "" && loops < 15) {
+      cur = JSON.parse(cur);
+      loops++;
+    }
+  } catch {
+    return fallback;
+  }
+  return cur === undefined || cur === null ? fallback : (cur as T);
+}
+
 async function nextId(env: Env, vendorId: string, kind: string) {
   const row = await env.DB.prepare(
     "SELECT value FROM counters WHERE vendor_id=? AND kind=?"
@@ -171,10 +187,40 @@ async function buildBackupPayload(env: Env) {
   const tables = ["vendors", "clientes", "produtos", "pedidos", "despesas", "lembretes", "rotas", "notas"];
   const payload: Record<string, any> = { exportedAt: nowISO(), tables: {} };
 
+  // Campos que são salvos como JSON-em-texto e precisam ser "desachatados"
+  // antes de irem pro backup, senão re-importar duplica a serialização.
+  const jsonFields: Record<string, string[]> = {
+    pedidos: ["itens"],
+    clientes: ["tags"],
+    produtos: ["tags"],
+    rotas: ["paradas"],
+  };
+
   for (const t of tables) {
     try {
-      const rows = await env.DB.prepare(`SELECT * FROM ${t}`).all<any>();
-      payload.tables[t] = rows.results || [];
+      // vendors: nunca incluir password_salt/password_hash no backup
+      const cols = t === "vendors" ? "id,email,name,role,active,owner_id,created_at" : "*";
+      let rows;
+      try {
+        rows = await env.DB.prepare(`SELECT ${cols} FROM ${t}`).all<any>();
+      } catch {
+        // fallback caso owner_id ainda não exista nessa base
+        rows = t === "vendors"
+          ? await env.DB.prepare(`SELECT id,email,name,role,active,created_at FROM ${t}`).all<any>()
+          : await env.DB.prepare(`SELECT * FROM ${t}`).all<any>();
+      }
+      let results = rows.results || [];
+      const fields = jsonFields[t];
+      if (fields) {
+        results = results.map((r: any) => {
+          const copy = { ...r };
+          for (const f of fields) {
+            if (f in copy) copy[f] = deepParseJSONField(copy[f], f === "paradas" || f === "tags" ? [] : []);
+          }
+          return copy;
+        });
+      }
+      payload.tables[t] = results;
     } catch (e: any) {
       payload.tables[t] = { _error: e?.message || "Falha" };
     }
@@ -350,6 +396,7 @@ export default {
 
       /** =================== BACKUP =================== **/
       if (p[1] === "backup") {
+        if (claim.role !== "admin") return bad("Acesso restrito a administradores.", 403);
         // Lista backups do R2 (deve vir antes do GET genérico abaixo)
         if (req.method === "GET" && p[2] === "list") {
           if (!env.BACKUPS) return json({ backups: [] });
@@ -1334,6 +1381,35 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
       // ──────────────────────────────────────────────────────────────────
       // /api/vendas  — Vendas Diárias (salvo no D1, não localStorage)
       // ──────────────────────────────────────────────────────────────────
+      /** ============ REPARO: desfazer serialização dupla em pedidos.itens ============ **/
+      if (p[1] === "admin" && p[2] === "repair-pedidos-itens" && req.method === "POST") {
+        if (claim.role !== "admin") return bad("Acesso restrito a administradores.", 403);
+        const rows = await env.DB.prepare("SELECT id, itens, length(itens) as tam FROM pedidos").all<any>();
+        let fixed = 0, skipped = 0;
+        const errors: any[] = [];
+        for (const row of rows.results || []) {
+          try {
+            let cur: any = row.itens;
+            let loops = 0;
+            while (typeof cur === "string" && cur.trim() !== "" && loops < 15) {
+              cur = JSON.parse(cur);
+              loops++;
+            }
+            if (!Array.isArray(cur)) cur = [];
+            const clean = JSON.stringify(cur);
+            if (clean !== row.itens) {
+              await env.DB.prepare("UPDATE pedidos SET itens=? WHERE id=?").bind(clean, row.id).run();
+              fixed++;
+            } else {
+              skipped++;
+            }
+          } catch (e: any) {
+            errors.push({ id: row.id, tam_original: row.tam, error: e?.message || String(e) });
+          }
+        }
+        return json({ ok: true, fixed, skipped, errors });
+      }
+
       if (p[1] === "vendas") {
         if (req.method === "GET" && !p[2]) {
           const since = url.searchParams.get("since") || "";
