@@ -218,6 +218,7 @@ export default {
       if (req.method === "OPTIONS") return withCors(new Response(null, { status: 204 }));
 
       const p = parts(req.url);
+      const url = new URL(req.url);
 
       if (p[0] !== "api") return bad("Not found", 404);
 
