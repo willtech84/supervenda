@@ -191,8 +191,9 @@ async function saveBackupToR2(env: Env) {
     await env.BACKUPS.put(key, JSON.stringify(payload), {
       httpMetadata: { contentType: "application/json" },
     });
-    // Manter só os 30 backups mais recentes
-    const list = await env.BACKUPS.list();
+    // Manter só os 30 backups mais recentes (filtrando SÓ arquivos de backup,
+    // nunca tocar em manuais/documentos que dividem o mesmo bucket R2)
+    const list = await env.BACKUPS.list({ prefix: "backup-" });
     const keys = (list.objects || []).map((o: any) => o.key).sort();
     if (keys.length > 30) {
       for (const k of keys.slice(0, keys.length - 30)) {
@@ -352,7 +353,7 @@ export default {
         // Lista backups do R2 (deve vir antes do GET genérico abaixo)
         if (req.method === "GET" && p[2] === "list") {
           if (!env.BACKUPS) return json({ backups: [] });
-          const list = await env.BACKUPS.list();
+          const list = await env.BACKUPS.list({ prefix: "backup-" });
           const backups = (list.objects || [])
             .map((o: any) => ({ key: o.key, size: o.size, uploaded: o.uploaded }))
             .sort((a: any, b: any) => String(b.key).localeCompare(String(a.key)));
@@ -363,6 +364,7 @@ export default {
           if (!env.BACKUPS) return bad("Armazenamento R2 não configurado.", 503);
           const key = url.searchParams.get("key") || "";
           if (!key) return bad("Parâmetro 'key' é obrigatório.", 400);
+          if (!key.startsWith("backup-")) return bad("Chave inválida: não é um backup.", 400);
           const obj = await env.BACKUPS.get(key);
           if (!obj) return bad("Backup não encontrado.", 404);
           const text = await obj.text();
