@@ -5791,19 +5791,26 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
     });
     $("#sidebar-logout-btn")?.addEventListener("click",doLogout);
 
-    // ── Importar backup do Cloudflare ──────────────────────────────────────
-    $("#sidebar-cf-backup-btn")?.addEventListener("click",()=>$("#sidebar-cf-backup-file")?.click());
-    $("#sidebar-cf-backup-file")?.addEventListener("change",async e=>{
-      const file=e.target.files[0]; if(!file) return;
-      e.target.value="";
-      if(!confirm("⚠️ Importar backup do Cloudflare D1.\n\nIsso vai CRIAR novos registros (não sobrescreve IDs existentes).\n\nDeseja continuar?")) return;
+    // ── Importar backup do Cloudflare (R2) ───────────────────────────────────
+    $("#sidebar-cf-backup-btn")?.addEventListener("click",async()=>{
       await runWithUi(async()=>{
-        const text=await file.text();
+        let lista;
+        try{ lista=await DB.request("/api/backup/list"); }
+        catch(e){ toast("Erro ao listar backups do Cloudflare: "+(e?.message||""),"error"); return; }
+
+        const backups=lista?.backups||[];
+        if(!backups.length){ toast("Nenhum backup encontrado no Cloudflare (R2).","warning"); return; }
+
+        const maisRecente=backups[0];
+        const dataFmt=maisRecente.uploaded?new Date(maisRecente.uploaded).toLocaleString("pt-BR"):maisRecente.key;
+        if(!confirm(`⚠️ Importar backup mais recente do Cloudflare (R2).\n\nArquivo: ${maisRecente.key}\nData: ${dataFmt}\n\nIsso vai CRIAR novos registros (não sobrescreve IDs existentes).\n\nDeseja continuar?`)) return;
+
         let bk;
-        try{ bk=JSON.parse(text); }
-        catch{ toast("Arquivo inválido.","error"); return; }
+        try{ bk=await DB.request(`/api/backup/download?key=${encodeURIComponent(maisRecente.key)}`); }
+        catch(e){ toast("Erro ao baixar backup do Cloudflare: "+(e?.message||""),"error"); return; }
+
         // Formato D1 export: {results:[{type:'table',name:...,columns:[],rows:[[],...]},...]}
-        // ou formato backup supervenda: {data:{tables:{...}}}
+        // ou formato backup supervenda: {tables:{...}}
         // ou array direto de objetos
         const tables=bk?.results||bk?.data?.tables||bk?.tables||bk?.data||bk;
         if(!tables){ toast("Formato de backup do Cloudflare não reconhecido.","error"); return; }
@@ -5847,7 +5854,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
         }
         await preloadAll(); renderCurrent();
         toast(`✅ Backup Cloudflare importado: ${ok} registros${erros?` · ${erros} erros`:""}.`,ok?"success":"warning",6000);
-      },"Importando backup Cloudflare...");
+      },"Importando backup do Cloudflare...");
     });
 
     // Modo claro/escuro
