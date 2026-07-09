@@ -419,7 +419,8 @@ export default {
         }
         if (req.method === "GET") {
           const payload = await buildBackupPayload(env);
-          const r2key = await saveBackupToR2(env);
+          const salvarR2 = url.searchParams.get("salvar_r2") !== "0";
+          const r2key = salvarR2 ? await saveBackupToR2(env) : false;
           return json({ ...payload, r2key: r2key || null });
         }
       }
