@@ -269,9 +269,10 @@
   }
 
   // ── Backup ───────────────────────────────────────────────────────────────
-  async function backup() {
+  async function backup(salvarR2 = true) {
     try {
-      const data = await request(ENDPOINTS.backup || '/api/backup', { method: 'GET' });
+      const qs = salvarR2 ? '' : '?salvar_r2=0';
+      const data = await request((ENDPOINTS.backup || '/api/backup') + qs, { method: 'GET' });
       return { mode: 'remote', data };
     } catch (err) { if (err?.status && err.status !== 404) throw err; }
     const payload = { exportedAt: new Date().toISOString(), apiBase: apiBase(), user: getUser(), data: {} };
