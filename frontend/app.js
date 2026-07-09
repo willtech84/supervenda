@@ -3366,19 +3366,44 @@
           ${semEndereco.length?`<div style="font-size:11px;color:var(--muted);margin-top:6px;">⚠️ ${semEndereco.length} visita(s) sem endereço cadastrado não aparecem no mapa.</div>`:""}
         </div>`;
 
-      // Cache de geocoding em memória
-      if(!state._visGeoCache) state._visGeoCache={};
+      // Cache de geocoding: memória + localStorage (persiste entre sessões/abas),
+      // guarda também falhas (com validade) pra não martelar o Nominatim de novo.
+      const GEO_LS_KEY="sv_geo_cache_v1";
+      const GEO_FAIL_TTL_MS=24*60*60*1000; // não retenta endereço que falhou por 24h
+      if(!state._visGeoCache){
+        state._visGeoCache={};
+        try{ state._visGeoCache=JSON.parse(localStorage.getItem(GEO_LS_KEY)||"{}"); }catch{}
+      }
       const geoCache=state._visGeoCache;
+      function persistGeoCache(){
+        try{ localStorage.setItem(GEO_LS_KEY,JSON.stringify(geoCache)); }catch{}
+      }
 
       async function geocodeVisita(v){
-        const key=String(v.id||v._id);
-        if(geoCache[key]) return geoCache[key];
         const partes=[v.endereco,v.cidade,"Brasil"].filter(Boolean).join(", ");
+        const key=partes.toLowerCase(); // cache por endereço (deduplica visitas no mesmo lugar)
+        const cached=geoCache[key];
+        if(cached){
+          if(cached.ok) return cached.coord;
+          if(Date.now()-cached.ts<GEO_FAIL_TTL_MS) return null; // falha recente, não retenta
+        }
         try{
           const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(partes)}`,{headers:{"User-Agent":"supervenda-app"}});
+          if(!r.ok){ geoCache[key]={ok:false,ts:Date.now()}; persistGeoCache(); await new Promise(res=>setTimeout(res,1100)); return null; }
           const j=await r.json();
-          if(j&&j[0]){const coord={lat:parseFloat(j[0].lat),lng:parseFloat(j[0].lon)};geoCache[key]=coord;return coord;}
-        }catch{}
+          await new Promise(res=>setTimeout(res,1100)); // respeita limite Nominatim (1 req/s)
+          if(j&&j[0]){
+            const coord={lat:parseFloat(j[0].lat),lng:parseFloat(j[0].lon)};
+            geoCache[key]={ok:true,coord,ts:Date.now()};
+            persistGeoCache();
+            return coord;
+          }
+          geoCache[key]={ok:false,ts:Date.now()};
+          persistGeoCache();
+        }catch{
+          geoCache[key]={ok:false,ts:Date.now()};
+          persistGeoCache();
+        }
         return null;
       }
 
@@ -3386,12 +3411,19 @@
         const leafletDiv=document.getElementById("sv-vis-leaflet");
         if(!leafletDiv) return;
         const L=window.L;
+        // Destruir instância anterior do mapa, se existir, para evitar
+        // "Map container is already initialized" ao trocar de aba
+        if(state._visLeafletMap){
+          try{ state._visLeafletMap.remove(); }catch{}
+          state._visLeafletMap=null;
+        }
         leafletDiv.innerHTML="";
         if(!filtradas.length){
           leafletDiv.innerHTML=`<div style="padding:20px;text-align:center;color:var(--muted);">Nenhuma visita com localização no período.<br><span style="font-size:11px;">Use o botão 📍 ao registrar a visita ou cadastre o endereço.</span></div>`;
           return;
         }
         const map=L.map(leafletDiv);
+        state._visLeafletMap=map;
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
         const cidadeCount={};
         filtradas.forEach(v=>{ const c=v.cidade||"Sem cidade"; cidadeCount[c]=(cidadeCount[c]||0)+1; });
@@ -3419,14 +3451,13 @@
         const todasComCoord=[...comLat.map(v=>{const[lat,lng]=String(v.lat).split(",").map(Number);return{...v,_coord:(!isNaN(lat)&&!isNaN(lng))?{lat,lng}:null};})]
           .filter(v=>v._coord);
 
-        // Geocodificar visitas sem lat em paralelo (limit 3 simultâneas)
+        // Geocodificar visitas sem lat, 1 por vez (respeita limite de 1 req/s do Nominatim).
+        // Endereços já cacheados (sucesso ou falha recente) resolvem na hora, sem rede.
         const batch=semLat.slice(0,20); // max 20 para não abusar do nominatim
-        for(let i=0;i<batch.length;i+=3){
-          const chunk=batch.slice(i,i+3);
-          await Promise.all(chunk.map(async v=>{
-            const coord=await geocodeVisita(v);
-            if(coord) todasComCoord.push({...v,_coord:coord});
-          }));
+        for(const v of batch){
+          const coord=await geocodeVisita(v);
+          if(coord) todasComCoord.push({...v,_coord:coord});
+          // só espera 1.1s quando realmente bateu na rede (evita atraso p/ cache hit)
         }
 
         const prog=document.getElementById("sv-vis-geo-progress");
