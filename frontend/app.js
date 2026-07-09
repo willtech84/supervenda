@@ -5877,12 +5877,20 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
   }
 
   async function doBackup(){
+    const enviarCloud=confirm("Enviar este backup para o Cloudflare (nuvem)?\n\nOK = Sim\nCancelar = Não");
+    const baixarLocal=confirm("Baixar também uma cópia local (.json) neste dispositivo?\n\nOK = Sim\nCancelar = Não");
+    if(!enviarCloud&&!baixarLocal){ toast("Nenhuma opção selecionada — backup cancelado.","info"); return; }
     await runWithUi(async()=>{
-      const result=await DB.backup();
-      const fname=`supervenda-backup-${new Date().toISOString().replace(/[:.]/g,"-").slice(0,19)}.json`;
-      downloadJson(fname,result.data);
-      const r2msg=result.data?.r2key?` • R2: ${result.data.r2key}`:"";
-      toast("✅ Backup gerado."+r2msg,"success",5000);
+      const result=await DB.backup(enviarCloud);
+      if(baixarLocal){
+        const fname=`supervenda-backup-${new Date().toISOString().replace(/[:.]/g,"-").slice(0,19)}.json`;
+        downloadJson(fname,result.data);
+      }
+      const r2msg=result.data?.r2key?` • Cloudflare: ${result.data.r2key}`:"";
+      const partes=[];
+      if(baixarLocal) partes.push("arquivo local baixado");
+      if(enviarCloud) partes.push(result.data?.r2key?"enviado à nuvem":"nuvem indisponível");
+      toast(`✅ Backup gerado (${partes.join(" · ")}).${enviarCloud?r2msg:""}`,"success",6000);
     },"Gerando backup...");
   }
   function doLogout(trocar=false){
