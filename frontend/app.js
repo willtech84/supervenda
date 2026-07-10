@@ -1551,8 +1551,9 @@
         </tr>`;
       }).join("");
 
-      // svPrint: mantém o app em foco no Android
-      svPrint(`<!DOCTYPE html><html lang="pt-BR"><head>
+      // Aba real com print automático embutido — mais confiável que iframe
+      // invisível pra "Salvar como PDF" (evita imprimir a tela de trás).
+      const htmlOrcamento=`<!DOCTYPE html><html lang="pt-BR"><head>
       <meta charset="UTF-8"><title>Orcamento ${numOrc}</title>
       <style>
         *{box-sizing:border-box;margin:0;padding:0}
@@ -1643,7 +1644,30 @@
           <div>Willyam Krasinsky</div>
           <div>47 98908-8181</div>
         </div>
-      </div></body></html>`);
+      </div>
+      <script>
+        window.onload=function(){
+          setTimeout(function(){
+            window.print();
+          },350);
+        };
+      </script>
+      </body></html>`;
+
+      // Abre em aba/janela real (mais confiável que iframe invisível para impressão/PDF)
+      try{
+        const blob=new Blob([htmlOrcamento],{type:"text/html;charset=utf-8"});
+        const blobUrl=URL.createObjectURL(blob);
+        const janela=window.open(blobUrl,"_blank");
+        if(!janela){
+          // Popup bloqueado: abre via link como último recurso
+          const a=document.createElement("a");
+          a.href=blobUrl; a.target="_blank"; a.click();
+        }
+        setTimeout(()=>URL.revokeObjectURL(blobUrl),15000);
+      }catch(e){
+        toast("Erro ao abrir orçamento: "+(e?.message||""),"error");
+      }
     }
 
     // Submit: só salvar
