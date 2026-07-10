@@ -1662,16 +1662,18 @@
       const pedido=await salvarPedido(); if(!pedido) return;
       const pedidos=safeArray(state.cache.pedidos);
       const novo=pedidos.sort((a,b)=>String(b.created_at||"").localeCompare(String(a.created_at||"")))[0];
-      wrap.innerHTML=""; renderCurrent();
       toast("✅ Pedido salvo. Abrindo orçamento...","success");
-      setTimeout(()=>gerarOrcamentoPDF(pedido,novo?getId(novo):""),600);
+      // Gera o orçamento ANTES de voltar pra lista — se a tela por trás mudar
+      // antes do print disparar, alguns navegadores imprimem a tela errada.
+      gerarOrcamentoPDF(pedido,novo?getId(novo):"");
+      setTimeout(()=>{ wrap.innerHTML=""; renderCurrent(); },1200);
     });
 
     // Gerar orçamento (edição)
     $("#btn-gerar-orcamento")?.addEventListener("click",async()=>{
       const pedido=await salvarPedido(); if(!pedido) return;
-      wrap.innerHTML=""; renderCurrent();
-      setTimeout(()=>gerarOrcamentoPDF(pedido,itemId),600);
+      gerarOrcamentoPDF(pedido,itemId);
+      setTimeout(()=>{ wrap.innerHTML=""; renderCurrent(); },1200);
     });
 
     // Excluir
