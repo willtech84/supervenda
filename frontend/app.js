@@ -1535,117 +1535,115 @@
 
     function gerarOrcamentoPDF(pedido,pedidoId){
       const cliente=clientes.find(c=>String(getId(c))===String(pedido.clienteId||""))||{nome:pedido.clienteNome||""};
-      const nomeVendedor=DB.getUser()?.name||"Vendedor";
       const dataEmissao=new Date().toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric"});
       const numOrc=pedidoId?String(pedidoId).slice(-6).toUpperCase():`${Date.now()}`.slice(-6);
-      const itensHtml=(pedido.itens||[]).map((it,i)=>`
+
+      const itensHtml=(pedido.itens||[]).map((it,i)=>{
+        const subtotal=it.subtotal||it.qtd*it.valorUnit*(1-(it.desconto||0)/100);
+        const descLinha=it.desconto?` <span style="color:#c62828;font-size:10px;">(desc. ${it.desconto}%)</span>`:"";
+        return `
         <tr>
           <td style="text-align:center;">${i+1}</td>
-          <td>${esc(it.nome||"")}${it.codigo?` <small style="color:#888;">[${esc(it.codigo)}]</small>`:""}</td>
+          <td>${esc(it.nome||"")}${it.codigo?` <span style="color:#888;font-size:10px;">[${esc(it.codigo)}]</span>`:""}${descLinha}</td>
           <td style="text-align:center;">${Number(it.qtd).toLocaleString("pt-BR",{maximumFractionDigits:2})}</td>
           <td style="text-align:right;">${moneyBR(it.valorUnit)}</td>
-          <td style="text-align:center;">${it.desconto?it.desconto+"%":"-"}</td>
-          <td style="text-align:right;font-weight:600;">${moneyBR(it.subtotal||it.qtd*it.valorUnit*(1-(it.desconto||0)/100))}</td>
-        </tr>`).join("");
-
-      const telCliente=cliente.telefone?String(cliente.telefone).replace(/\D/g,""):"";
-      const emailCliente=cliente.email||"";
-      const msgWpp=encodeURIComponent(`Olá ${cliente.nome||""}! Segue o orçamento nº ${numOrc} no valor de ${moneyBR(pedido.total)}. Qualquer dúvida estou à disposição!`);
-      const wppLink=telCliente?`https://wa.me/55${telCliente}?text=${msgWpp}`:"";
-      const emailLink=emailCliente?`mailto:${emailCliente}?subject=Orçamento%20nº%20${numOrc}&body=${encodeURIComponent(`Olá ${cliente.nome||""}!\n\nSegue o orçamento nº ${numOrc} conforme solicitado.\nValor total: ${moneyBR(pedido.total)}\n\nAtenciosamente,\n${nomeVendedor}`)}`:"";
+          <td style="text-align:right;font-weight:600;">${moneyBR(subtotal)}</td>
+        </tr>`;
+      }).join("");
 
       // svPrint: mantém o app em foco no Android
       svPrint(`<!DOCTYPE html><html lang="pt-BR"><head>
-      <meta charset="UTF-8"><title>Orçamento nº ${numOrc}</title>
+      <meta charset="UTF-8"><title>Orcamento ${numOrc}</title>
       <style>
         *{box-sizing:border-box;margin:0;padding:0}
-        body{font-family:'Segoe UI',Arial,sans-serif;color:#111;background:#fff;font-size:13px;}
-        .page{max-width:800px;margin:0 auto;padding:28px;}
-        .header{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:start;margin-bottom:24px;padding-bottom:16px;border-bottom:3px solid #1a2744;}
-        .logo{font-size:22px;font-weight:800;color:#1a2744;}
-        .orcnum{text-align:right;} .orcnum h2{font-size:20px;font-weight:800;color:#1a2744;} .orcnum p{font-size:12px;color:#666;margin-top:2px;}
-        .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;}
-        .info-box{background:#f5f7fa;border-radius:8px;padding:12px;}
-        .info-box h3{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;}
-        table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px;}
-        th{background:#1a2744;color:#fff;padding:9px 10px;text-align:left;font-size:11px;text-transform:uppercase;}
-        td{padding:8px 10px;border-bottom:1px solid #eee;} tr:nth-child(even){background:#f9f9f9;}
-        .total-box{display:flex;justify-content:flex-end;margin-bottom:20px;}
-        .total-inner{background:#1a2744;color:#fff;border-radius:10px;padding:14px 20px;min-width:200px;text-align:right;}
-        .total-inner .label{font-size:11px;opacity:.7;margin-bottom:4px;} .total-inner .valor{font-size:24px;font-weight:800;}
-        .footer{border-top:1px solid #eee;padding-top:16px;font-size:11px;color:#888;text-align:center;}
-        .btn-bar{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-bottom:20px;padding:16px;background:#f0f4fb;border-radius:10px;}
-        .btn-bar a,.btn-bar button{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;border:none;}
-        .btn-print{background:#1a2744;color:#fff;} .btn-wpp{background:#25d366;color:#fff;} .btn-mail{background:#4285f4;color:#fff;} .btn-close{background:#eee;color:#333;}
-        .obs-box{background:#fffbe6;border-left:3px solid #ffb300;padding:10px 14px;border-radius:0 8px 8px 0;margin-bottom:16px;font-size:12px;}
-        .btn-disabled{opacity:.4;cursor:not-allowed;}
-        @media print{.btn-bar{display:none!important}.page{padding:10px;}}
+        body{font-family:Arial,Helvetica,sans-serif;color:#111;background:#fff;font-size:13px;}
+        .page{max-width:800px;margin:0 auto;padding:24px;}
+        table.layout{width:100%;border-collapse:collapse;}
+        .cab{width:100%;border-collapse:collapse;margin-bottom:18px;border-bottom:3px solid #1a2744;padding-bottom:12px;}
+        .cab td{vertical-align:top;padding-bottom:12px;}
+        .cab .marca{font-size:20px;font-weight:800;color:#1a2744;}
+        .cab .num{text-align:right;font-size:18px;font-weight:800;color:#1a2744;}
+        .cab .sub{font-size:11px;color:#666;margin-top:2px;}
+        .clidata{width:100%;border-collapse:collapse;margin-bottom:16px;}
+        .clidata td{background:#f5f7fa;padding:10px 12px;vertical-align:top;}
+        .clidata td:first-child{border-radius:8px 0 0 8px;width:65%;}
+        .clidata td:last-child{border-radius:0 8px 8px 0;border-left:2px solid #fff;}
+        .lbl{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;}
+        .val{font-size:14px;font-weight:700;color:#111;}
+        table.itens{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px;}
+        table.itens th{background:#1a2744;color:#fff;padding:8px 10px;text-align:left;font-size:11px;text-transform:uppercase;}
+        table.itens td{padding:8px 10px;border-bottom:1px solid #eee;}
+        table.itens tr:nth-child(even){background:#f9f9f9;}
+        .pagamento{margin-bottom:14px;font-size:13px;}
+        .pagamento strong{color:#1a2744;}
+        table.totaltab{width:100%;border-collapse:collapse;margin-bottom:18px;}
+        table.totaltab td{text-align:right;}
+        .total-inner{display:inline-block;background:#1a2744;color:#fff;border-radius:10px;padding:12px 20px;min-width:180px;text-align:right;}
+        .total-inner .lbl2{font-size:11px;opacity:.8;margin-bottom:3px;}
+        .total-inner .valor{font-size:22px;font-weight:800;}
+        .validade{background:#fffbe6;border-left:3px solid #ffb300;padding:8px 12px;border-radius:0 8px 8px 0;margin-bottom:16px;font-size:12px;font-weight:600;color:#7a5c00;}
+        .obs-box{background:#f5f7fa;border-left:3px solid #1a2744;padding:10px 14px;border-radius:0 8px 8px 0;margin-bottom:16px;font-size:12px;}
+        .footer{border-top:1px solid #ddd;padding-top:14px;font-size:11px;color:#555;text-align:center;line-height:1.6;}
+        .footer .empresa{font-weight:700;color:#1a2744;font-size:12px;}
+        @media print{.page{padding:8px;}}
       </style></head>
       <body>
       <div class="page">
-        <div class="btn-bar">
-          <button class="btn-print" onclick="window.print()">🖨️ Imprimir / Salvar PDF</button>
-          ${wppLink
-            ?`<a class="btn-wpp" href="${wppLink}" target="_blank" rel="noopener noreferrer">💬 Enviar WhatsApp</a>`
-            :`<button class="btn-wpp btn-disabled" disabled title="Cadastre o telefone do cliente">💬 WhatsApp</button>`}
-          ${emailLink
-            ?`<a class="btn-mail" href="${emailLink}">✉️ Enviar E-mail</a>`
-            :`<button class="btn-mail btn-disabled" disabled title="Cadastre o e-mail do cliente">✉️ E-mail</button>`}
-          <button class="btn-close" onclick="window.close()">✕ Fechar</button>
-        </div>
-        <div class="header">
-          <div>
-            <div class="logo">⚡ Supervenda</div>
-            <div style="font-size:12px;color:#666;margin-top:4px;">Vendedor: ${esc(nomeVendedor)}</div>
-          </div>
-          <div class="orcnum">
-            <h2>ORÇAMENTO</h2>
-            <p>Nº ${numOrc}</p>
-            <p>Emitido: ${dataEmissao}</p>
-            ${pedido.data?`<p>Data pedido: ${dateFormatBR(pedido.data)}</p>`:""}
-          </div>
-        </div>
-        <div class="info-grid">
-          <div class="info-box">
-            <h3>👤 Cliente</h3>
-            <p style="font-size:15px;font-weight:700;">${esc(cliente.nome||pedido.clienteNome||"")}</p>
-            ${cliente.cpfcnpj?`<p style="color:#666;font-size:12px;margin-top:3px;">CPF/CNPJ: ${esc(cliente.cpfcnpj)}</p>`:""}
-            ${cliente.endereco?`<p style="color:#666;font-size:12px;margin-top:3px;">${esc(cliente.endereco)}${cliente.bairro?", "+esc(cliente.bairro):""}${cliente.cidade?" — "+esc(cliente.cidade):""}</p>`:""}
-            ${telCliente?`<p style="color:#666;font-size:12px;margin-top:3px;">📞 ${esc(cliente.telefone)}</p>`:""}
-            ${emailCliente?`<p style="color:#666;font-size:12px;margin-top:3px;">✉️ ${esc(emailCliente)}</p>`:""}
-          </div>
-          <div class="info-box">
-            <h3>📋 Condições</h3>
-            ${pedido.formaPagamento?`<p style="margin-bottom:4px;">Pagamento: <strong>${esc(pedido.formaPagamento)}</strong></p>`:""}
-            ${pedido.urgencia&&pedido.urgencia!=="Normal"?`<p style="margin-bottom:4px;">Urgência: <strong style="color:${pedido.urgencia==="Alta"?"#c62828":pedido.urgencia==="Média"?"#e65100":"#1565c0"};">${esc(pedido.urgencia)}</strong></p>`:""}
-            <p>Status: <strong>${esc(pedido.status||"Aberto")}</strong></p>
-          </div>
-        </div>
-        <table>
+        <table class="cab"><tr>
+          <td>
+            <div class="marca">Supervenda</div>
+            <div class="sub">Vendedor: ${esc(DB.getUser()?.name||"Vendedor")}</div>
+          </td>
+          <td class="num">
+            ORÇAMENTO Nº ${numOrc}
+            <div class="sub">Emitido: ${dataEmissao}</div>
+          </td>
+        </tr></table>
+
+        <table class="clidata"><tr>
+          <td>
+            <span class="lbl">Cliente</span>
+            <span class="val">${esc(cliente.nome||pedido.clienteNome||"")}</span>
+            ${cliente.cpfcnpj?`<div style="color:#666;font-size:11px;margin-top:4px;">CPF/CNPJ: ${esc(cliente.cpfcnpj)}</div>`:""}
+            ${cliente.endereco?`<div style="color:#666;font-size:11px;margin-top:2px;">${esc(cliente.endereco)}${cliente.bairro?", "+esc(cliente.bairro):""}${cliente.cidade?" — "+esc(cliente.cidade):""}</div>`:""}
+            ${cliente.telefone?`<div style="color:#666;font-size:11px;margin-top:2px;">Tel: ${esc(cliente.telefone)}</div>`:""}
+          </td>
+          <td>
+            <span class="lbl">Data</span>
+            <span class="val">${pedido.data?dateFormatBR(pedido.data):dataEmissao}</span>
+          </td>
+        </tr></table>
+
+        <table class="itens">
           <thead><tr>
             <th style="width:32px;">#</th>
-            <th>Produto / Descrição</th>
-            <th style="width:55px;text-align:center;">Qtd</th>
-            <th style="width:90px;text-align:right;">Unit.</th>
-            <th style="width:55px;text-align:center;">Desc.</th>
-            <th style="width:100px;text-align:right;">Subtotal</th>
+            <th>Descrição</th>
+            <th style="width:60px;text-align:center;">Qtd.</th>
+            <th style="width:95px;text-align:right;">Valor Unit.</th>
+            <th style="width:105px;text-align:right;">Total</th>
           </tr></thead>
-          <tbody>${itensHtml||`<tr><td colspan="6" style="text-align:center;color:#888;padding:16px;">Nenhum item registrado.</td></tr>`}</tbody>
+          <tbody>${itensHtml||`<tr><td colspan="5" style="text-align:center;color:#888;padding:16px;">Nenhum item registrado.</td></tr>`}</tbody>
         </table>
-        <div class="total-box">
+
+        <div class="pagamento">Forma de pagamento: <strong>${esc(pedido.formaPagamento||"A combinar")}</strong></div>
+
+        <table class="totaltab"><tr><td>
           <div class="total-inner">
-            <div class="label">VALOR TOTAL</div>
+            <div class="lbl2">VALOR TOTAL</div>
             <div class="valor">${moneyBR(pedido.total)}</div>
           </div>
-        </div>
+        </td></tr></table>
+
+        <div class="validade">Orçamento válido por 10 dias a partir da data de emissão.</div>
+
         ${pedido.obs?`<div class="obs-box"><strong>Observação:</strong> ${esc(pedido.obs)}</div>`:""}
+
         <div class="footer">
-          <p>Este orçamento é válido por 30 dias a partir da data de emissão.</p>
-          <p style="margin-top:4px;">Gerado por Supervenda · ${esc(nomeVendedor)} · ${dataEmissao}</p>
-          <p style="margin-top:6px;font-size:10px;color:#aaa;">Desenvolvido por Willtech84</p>
+          <div class="empresa">Willtech84 Soluções Digitais</div>
+          <div>Willyam Krasinsky</div>
+          <div>47 98908-8181</div>
         </div>
       </div></body></html>`);
-      win.document.close();
     }
 
     // Submit: só salvar
