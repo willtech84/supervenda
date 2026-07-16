@@ -712,6 +712,11 @@
 
     if(!state._pedFiltro) state._pedFiltro="tudo";
     if(!state._lemFiltro) state._lemFiltro="tudo";
+    if(!state._cliCidade) state._cliCidade="";
+
+    const cidadesClientes=resource==="clientes"
+      ?[...new Set(rawItems.map(it=>String(it.cidade||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"))
+      :[];
 
     const getFiltered=()=>{
       const q=String(state.ui.search||"").trim().toLowerCase();
@@ -719,6 +724,7 @@
       // Filtro de período — usa filtrarPorPeriodoGen que trata data_especifica também
       if(resource==="pedidos")  items=filtrarPorPeriodoGen(items,"data","_pedFiltro");
       if(resource==="lembretes") items=filtrarPorPeriodoGen(items,"data","_lemFiltro");
+      if(resource==="clientes"&&state._cliCidade) items=items.filter(it=>String(it.cidade||"").trim()===state._cliCidade);
       return !q?items:items.filter(it=>Object.values(it||{}).some(v=>String(v??"").toLowerCase().includes(q)));
     };
 
@@ -740,6 +746,14 @@
           <button class="btn-pfiltro btn ${state._pedFiltro==="tudo"?"btn-primary":"btn-secondary"}" data-pf="tudo" style="font-size:12px;flex:1;">📋 Todos</button>
         </div>`:""}
         ${resource==="lembretes"?renderFiltroPeriodo("_lemFiltro"):""}
+        ${resource==="clientes"?`
+        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+          <select id="cli-filtro-cidade" style="flex:1;min-width:140px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;">
+            <option value="">📍 Todas as cidades</option>
+            ${cidadesClientes.map(c=>`<option value="${esc(c)}" ${state._cliCidade===c?"selected":""}>${esc(c)}</option>`).join("")}
+          </select>
+          <button id="cli-disparo-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(37,211,102,.12);border-color:rgba(37,211,102,.35);color:#25d366;">📢 Disparar mensagem</button>
+        </div>`:""}
         ${resource==="mercadorias"?`
         <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center;">
           <button id="sv-scan-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(0,230,118,.1);border-color:rgba(0,230,118,.3);color:var(--green);">📷 Ler código de barras</button>
@@ -795,6 +809,21 @@
         const cnt=$("#sv-count");
         if(cnt) cnt.textContent=`${f.length} registro${f.length!==1?"s":""}`;
         renderList(resource,f,rawItems);
+      });
+    }
+
+    // Filtro por cidade + disparo de mensagem (clientes)
+    if(resource==="clientes"){
+      $("#cli-filtro-cidade")?.addEventListener("change",e=>{
+        state._cliCidade=e.target.value||"";
+        const f=getFiltered();
+        const cnt=$("#sv-count");
+        if(cnt) cnt.textContent=`${f.length} registro${f.length!==1?"s":""}`;
+        renderList(resource,f,rawItems);
+      });
+      $("#cli-disparo-btn")?.addEventListener("click",()=>{
+        const alvos=getFiltered().map(it=>({nome:it.nome,telefone:it.telefone,cidade:it.cidade}));
+        abrirDisparoWhatsApp(alvos,state._cliCidade||"todas as cidades");
       });
     }
 
@@ -957,6 +986,64 @@
     });
   }
 
+  // ─── Disparo de mensagem em massa (WhatsApp) ───────────────────────────────
+  // Abre um modal com a lista de destinatários; cada envio é um clique real do
+  // usuário (link wa.me em nova aba), pois navegadores bloqueiam abertura
+  // automática de múltiplas abas sem interação direta.
+  function abrirDisparoWhatsApp(destinatarios,tituloExtra){
+    const seen=new Set();
+    const validos=[];
+    (destinatarios||[]).forEach(d=>{
+      const tel=String(d.telefone||"").replace(/\D/g,"");
+      if(tel.length<10) return;
+      if(seen.has(tel)) return;
+      seen.add(tel);
+      validos.push({nome:d.nome||"",telefone:tel,cidade:d.cidade||"",enviado:false});
+    });
+    if(!validos.length){toast("Nenhum contato com telefone válido nesse filtro.","warning");return;}
+
+    const mo=document.createElement("div");
+    mo.style.cssText="position:fixed;inset:0;z-index:2100;background:rgba(0,0,0,.7);display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;";
+    mo.innerHTML=`
+      <div style="background:var(--bg);border-radius:16px;padding:20px;width:100%;max-width:480px;max-height:88vh;overflow-y:auto;margin:auto;display:flex;flex-direction:column;gap:10px;">
+        <div style="font-size:15px;font-weight:700;">📢 Disparo de mensagem${tituloExtra?` — ${esc(tituloExtra)}`:""} · ${validos.length} contato${validos.length!==1?"s":""}</div>
+        <div style="font-size:12px;color:var(--muted);">Escreva a mensagem uma vez (use <b>{nome}</b> para personalizar) e clique em "Abrir" em cada contato — o WhatsApp já abre com o texto pronto.</div>
+        <textarea id="disp-msg" rows="3" style="width:100%;padding:10px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;resize:vertical;">Olá {nome}, aqui é o Willyam da Cefeq. Tudo bem?</textarea>
+        <div id="disp-lista" style="display:flex;flex-direction:column;gap:6px;max-height:44vh;overflow-y:auto;"></div>
+        <button id="disp-close" class="btn btn-ghost" style="width:100%;margin-top:4px;">Fechar</button>
+      </div>`;
+    document.body.appendChild(mo);
+
+    function montarMsg(nome){
+      const tpl=mo.querySelector("#disp-msg")?.value||"";
+      return encodeURIComponent(tpl.replace(/\{nome\}/gi,nome||""));
+    }
+    function renderListaDisparo(){
+      const lst=mo.querySelector("#disp-lista"); if(!lst) return;
+      lst.innerHTML=validos.map((d,i)=>`
+        <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${d.enviado?"opacity:.5;":""}">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(d.nome||"(sem nome)")}</div>
+            <div style="font-size:11px;color:var(--muted);">${esc(d.cidade||"—")} · ${esc(d.telefone)}</div>
+          </div>
+          <a href="#" data-disp-idx="${i}" class="btn btn-secondary" style="font-size:12px;padding:5px 10px;flex-shrink:0;background:rgba(37,211,102,.12);border-color:rgba(37,211,102,.35);color:#25d366;text-decoration:none;">${d.enviado?"✅ Enviado":"Abrir"}</a>
+        </div>`).join("");
+      lst.querySelectorAll("[data-disp-idx]").forEach(a=>{
+        a.addEventListener("click",e=>{
+          e.preventDefault();
+          const i=Number(a.getAttribute("data-disp-idx"));
+          const d=validos[i]; if(!d) return;
+          window.open(`https://wa.me/55${d.telefone}?text=${montarMsg(d.nome)}`,"_blank");
+          d.enviado=true;
+          renderListaDisparo();
+        });
+      });
+    }
+    renderListaDisparo();
+    mo.querySelector("#disp-close")?.addEventListener("click",()=>mo.remove());
+    mo.addEventListener("click",e=>{if(e.target===mo)mo.remove();});
+  }
+
   function getBadgeClass(status){
     if(!status) return "badge-muted"; const s=String(status).toLowerCase();
     if(s.includes("conclu")||s.includes("entregue")||s.includes("pago")) return "badge-green";
@@ -966,6 +1053,36 @@
   }
 
   // Máscaras de input
+  // Importar nome/telefone da agenda do celular via Contact Picker API
+  // (suportado no Chrome Android; em navegadores sem suporte, avisa e sugere colar manualmente)
+  async function importarContatoParaCampo(wrap,telSelector,nomeSelector){
+    const inpTel=wrap.querySelector(telSelector);
+    if(!inpTel) return;
+    if(!("contacts" in navigator)||!("ContactsManager" in window)){
+      toast("Seu navegador não suporta importar contatos diretamente. Isso funciona no Chrome para Android — cole o número manualmente.","warning",6000);
+      return;
+    }
+    try{
+      const props=["tel","name"];
+      const opts={multiple:false};
+      const contatos=await navigator.contacts.select(props,opts);
+      if(!contatos||!contatos.length){return;}
+      const c=contatos[0];
+      const tel=(c.tel&&c.tel[0])?String(c.tel[0]).replace(/\D/g,"").slice(-11):"";
+      if(tel){
+        const disp=tel.length===11?tel.replace(/^(\d{2})(\d{5})(\d{4})$/,"($1) $2-$3"):tel.replace(/^(\d{2})(\d{4})(\d{4})$/,"($1) $2-$3");
+        inpTel.value=disp;
+      }
+      const nomeInp=nomeSelector?wrap.querySelector(nomeSelector):wrap.querySelector("[name='nome']");
+      if(nomeInp&&!nomeInp.value&&c.name&&c.name[0]) nomeInp.value=String(c.name[0]).toUpperCase();
+      if(tel) toast("📇 Contato importado.","success");
+      else toast("Contato selecionado não tem telefone.","warning");
+    }catch(e){
+      // Usuário cancelou o seletor — não precisa avisar
+      if(e?.name!=="AbortError") toast("Não foi possível importar o contato: "+(e?.message||""),"error");
+    }
+  }
+
   function aplicarMascaras(wrap){
     // Telefone: (00) 00000-0000 ou (00) 0000-0000
     wrap.querySelectorAll("[name='telefone']").forEach(el=>{
@@ -1032,6 +1149,17 @@
           <button type="button" id="btn-geo-endereco" style="font-size:11px;padding:3px 8px;background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.3);border-radius:6px;color:var(--green);cursor:pointer;font-family:var(--font);">📍 Usar localização</button>
         </label>
         <input type="text" name="${esc(f.key)}" id="inp-endereco" value="${esc(displayVal)}" style="${inputStyle}"/>
+      </div>`;
+    }
+
+    // Campo telefone com botão de importar da agenda do celular
+    if(f.key==="telefone"){
+      return`<div class="field">
+        <label style="display:flex;align-items:center;justify-content:space-between;">
+          ${esc(f.label)}
+          <button type="button" id="btn-importar-contato" style="font-size:11px;padding:3px 8px;background:rgba(37,211,102,.1);border:1px solid rgba(37,211,102,.3);border-radius:6px;color:#25d366;cursor:pointer;font-family:var(--font);">📇 Importar contato</button>
+        </label>
+        <input type="tel" name="${esc(f.key)}" id="inp-telefone" value="${esc(displayVal)}" style="${inputStyle}"/>
       </div>`;
     }
 
@@ -1183,6 +1311,9 @@
         btn.textContent="📍 Usar localização"; btn.disabled=false;
       },{enableHighAccuracy:true,timeout:10000});
     });
+
+    // Importar contato da agenda do celular (Contact Picker API)
+    wrap.querySelector("#btn-importar-contato")?.addEventListener("click",()=>importarContatoParaCampo(wrap,"#inp-telefone"));
 
     // Voz em todos os campos de texto de qualquer formulário
     setTimeout(()=>bindVozNoCampo(wrap),120);
@@ -2983,6 +3114,7 @@
       catch(e){ visitas=[]; console.warn("visitas:",e?.message); }
     }
     if(!state._visFiltro) state._visFiltro="tudo";
+    if(!state._visCidade) state._visCidade="";
     const inStyle=`width:100%;padding:11px 14px;background:var(--bg);border:1px solid var(--border-hi);border-radius:9px;color:var(--text);font-family:var(--font);font-size:14px;`;
 
     // ── Sub-abas ─────────────────────────────────────────────────────────────
@@ -3041,6 +3173,7 @@
       const lista=document.getElementById("sv-vis-lista"); if(!lista) return;
       const q=String(document.getElementById("sv-vis-busca")?.value||"").toLowerCase();
       let filtradas=getFiltradasPorPeriodo();
+      if(state._visCidade) filtradas=filtradas.filter(v=>String(v.cidade||"").trim()===state._visCidade);
       if(q) filtradas=filtradas.filter(v=>
         String(v.nome||"").toLowerCase().includes(q)||String(v.telefone||"").toLowerCase().includes(q)||
         String(v.cidade||"").toLowerCase().includes(q)||String(v.obs||"").toLowerCase().includes(q)
@@ -3120,7 +3253,12 @@
           </div>
           <div class="form-grid">
             <div class="field"><label>Empresa / Nome *</label><input id="vis-nome" type="text" value="${esc(item?.nome||"")}" style="${inStyle}text-transform:uppercase;" placeholder="NOME DA EMPRESA"/></div>
-            <div class="field"><label>Telefone</label><input id="vis-tel" type="tel" value="${esc(item?.telefone||"")}" style="${inStyle}" placeholder="(00) 00000-0000"/></div>
+            <div class="field">
+              <label style="display:flex;align-items:center;justify-content:space-between;">Telefone
+                <button type="button" id="vis-importar-contato" style="font-size:11px;padding:3px 8px;background:rgba(37,211,102,.1);border:1px solid rgba(37,211,102,.3);border-radius:6px;color:#25d366;cursor:pointer;font-family:var(--font);">📇 Importar contato</button>
+              </label>
+              <input id="vis-tel" type="tel" value="${esc(item?.telefone||"")}" style="${inStyle}" placeholder="(00) 00000-0000"/>
+            </div>
             <div class="field">
               <label style="display:flex;align-items:center;justify-content:space-between;">Endereço
                 <button type="button" id="vis-geo" style="font-size:11px;padding:3px 8px;background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.3);border-radius:6px;color:var(--green);cursor:pointer;font-family:var(--font);">📍 Localização</button>
@@ -3187,6 +3325,8 @@
           btn.textContent="📍 Localização"; btn.disabled=false;
         },err=>{toast(err.message,"error");btn.textContent="📍 Localização";btn.disabled=false;},{enableHighAccuracy:true,timeout:10000});
       });
+      // Importar contato da agenda do celular
+      document.getElementById("vis-importar-contato")?.addEventListener("click",()=>importarContatoParaCampo(fw,"#vis-tel","#vis-nome"));
       // Toggle campos extras do lembrete
       document.getElementById("vis-criar-lembrete")?.addEventListener("change",e=>{
         const extra=document.getElementById("vis-lembrete-extra");
@@ -3800,19 +3940,44 @@
         <span class="search-icon">🔍</span>
         <input id="sv-vis-busca" type="search" placeholder="Buscar visitas..." autocomplete="off"/>
       </div>
+      <div id="sv-vis-filtro-cidade-wrap" style="display:flex;gap:6px;margin:0 0 8px;flex-wrap:wrap;align-items:center;${state._visTab!=="lista"?"display:none":""}">
+        <select id="vis-filtro-cidade" style="flex:1;min-width:140px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;">
+          <option value="">📍 Todas as cidades</option>
+          ${[...new Set(visitas.map(v=>String(v.cidade||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR")).map(c=>`<option value="${esc(c)}" ${state._visCidade===c?"selected":""}>${esc(c)}</option>`).join("")}
+        </select>
+        <button id="vis-disparo-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(37,211,102,.12);border-color:rgba(37,211,102,.35);color:#25d366;">📢 Disparar mensagem</button>
+      </div>
       <div id="sv-vis-lista" style="${state._visTab!=="lista"?"display:none":""}"></div>
       <div id="sv-vis-mapa" style="${state._visTab!=="mapa"?"display:none":""}"></div>
       <div id="sv-vis-graficos" style="${state._visTab!=="graficos"?"display:none":""}"></div>`;
 
     // Carregar e renderizar
+    function atualizarSeletorCidadeVisitas(){
+      const sel=document.getElementById("vis-filtro-cidade"); if(!sel) return;
+      const cidades=[...new Set(visitas.map(v=>String(v.cidade||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"));
+      sel.innerHTML=`<option value="">📍 Todas as cidades</option>${cidades.map(c=>`<option value="${esc(c)}" ${state._visCidade===c?"selected":""}>${esc(c)}</option>`).join("")}`;
+    }
     await runWithUi(async()=>{
       await carregarVisitas();
       const cnt=document.getElementById("sv-vis-count");
       if(cnt) cnt.textContent=`${visitas.length} visita${visitas.length!==1?"s":""}`;
+      atualizarSeletorCidadeVisitas();
       renderLista();
       if(state._visTab==="mapa") renderMapa();
       if(state._visTab==="graficos") renderGraficos();
     },"Carregando visitas...");
+
+    // Filtro por cidade + disparo de mensagem
+    document.getElementById("vis-filtro-cidade")?.addEventListener("change",e=>{
+      state._visCidade=e.target.value||"";
+      renderLista();
+    });
+    document.getElementById("vis-disparo-btn")?.addEventListener("click",()=>{
+      const alvos=getFiltradasPorPeriodo()
+        .filter(v=>!state._visCidade||String(v.cidade||"").trim()===state._visCidade)
+        .map(v=>({nome:v.nome,telefone:v.telefone,cidade:v.cidade}));
+      abrirDisparoWhatsApp(alvos,state._visCidade||"todas as cidades");
+    });
 
     // Filtros de período
     document.querySelectorAll("[data-vf]").forEach(btn=>{
@@ -3840,6 +4005,8 @@
       });
       const bw=document.getElementById("sv-vis-busca-wrap");
       if(bw) bw.style.display=tab==="lista"?"":"none";
+      const cw=document.getElementById("sv-vis-filtro-cidade-wrap");
+      if(cw) cw.style.display=tab==="lista"?"":"none";
       if(tab==="mapa") renderMapa();
       if(tab==="graficos") renderGraficos();
     }
@@ -3849,7 +4016,7 @@
     document.getElementById("vis-nova-btn")?.addEventListener("click",()=>renderFormVisita(null));
     document.getElementById("vis-rel-btn")?.addEventListener("click",abrirRelatorio);
     document.getElementById("vis-refresh-btn")?.addEventListener("click",async()=>{
-      await runWithUi(async()=>{ await carregarVisitas(); renderLista(); if(state._visTab==="mapa")renderMapa(); if(state._visTab==="graficos")renderGraficos(); toast("Atualizado.","success"); },"Atualizando...");
+      await runWithUi(async()=>{ await carregarVisitas(); atualizarSeletorCidadeVisitas(); renderLista(); if(state._visTab==="mapa")renderMapa(); if(state._visTab==="graficos")renderGraficos(); toast("Atualizado.","success"); },"Atualizando...");
     });
     document.getElementById("sv-vis-busca")?.addEventListener("input",renderLista);
   }
@@ -4402,7 +4569,7 @@
         const inp=document.getElementById("ven-prod-busca");
         const dd=document.getElementById("ven-prod-dropdown");
         if(!inp||!dd) return;
-        const mercs=safeArray(state.cache.mercadorias);
+        const mercs=safeArray(state.cache.mercadorias).map(m=>normalizeItem("mercadorias",m));
         let _ddAberto=false;
 
         function fecharDd(){ dd.style.display="none"; _ddAberto=false; }
@@ -4891,7 +5058,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
     // ── Importar item de Mercadorias ────────────────────────────────────────
     document.getElementById("est-import-merc")?.addEventListener("click",()=>{
       if(!tabelaAtiva){toast("Selecione uma tabela primeiro.","warning");return;}
-      const mercadorias=safeArray(state.cache.mercadorias);
+      const mercadorias=safeArray(state.cache.mercadorias).map(m=>normalizeItem("mercadorias",m));
       if(!mercadorias.length){toast("Nenhuma mercadoria cadastrada.","warning");return;}
 
       // ── Construir modal UMA VEZ — só a lista é atualizada ────────────────

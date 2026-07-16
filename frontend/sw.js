@@ -1,5 +1,5 @@
-// SuperVenda Service Worker — Offline First v3
-const CACHE_NAME = 'supervenda-v3';
+// SuperVenda Service Worker — Offline First v4
+const CACHE_NAME = 'supervenda-v4';
 const OFFLINE_QUEUE_KEY = 'sv_offline_queue';
 
 // Arquivos para cachear (shell do app)
@@ -12,10 +12,13 @@ const CACHE_ASSETS = [
   '/manifest.json',
 ];
 
-// Arquivos "core" que definem config/lógica do app: sempre buscar a versão
-// mais nova da rede primeiro (evita ficar preso em API_BASE antigo em cache).
-// Só usa cache se estiver offline.
+// Arquivos "core" que definem config/lógica do app: por padrão busca a versão
+// mais nova da rede, mas sem travar a abertura do app — se a rede demorar mais
+// que NETWORK_TIMEOUT_MS, serve o cache imediatamente e atualiza em segundo
+// plano assim que a rede responder. Evita tanto ficar preso em API_BASE antigo
+// (rede rápida = sempre ganha) quanto o app demorar para abrir em conexão ruim.
 const NETWORK_FIRST_FILES = ['/index.html', '/config.js', '/app.js', '/db.js', '/'];
+const NETWORK_TIMEOUT_MS = 1500;
 
 function isNetworkFirstAsset(url) {
   return NETWORK_FIRST_FILES.includes(url.pathname);
@@ -94,18 +97,42 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Assets "core" (config/app/db/index): network-first, cache só como fallback offline.
-  // Isso evita ficar preso em uma API_BASE antiga se o SW já tiver cacheado antes.
+  // Assets "core" (config/app/db/index): corrida rede vs. cache — se a rede
+  // responder antes do timeout, usa a versão da rede (sempre fresca em conexão
+  // boa, igual antes). Se a rede demorar mais que o timeout, serve o cache
+  // na hora para não travar a abertura do app, e ainda assim atualiza o cache
+  // assim que a resposta da rede chegar (fica pronta para a próxima abertura).
   if (isLocalAsset(url) && isNetworkFirstAsset(url)) {
-    e.respondWith(
-      fetch(e.request).then(resp => {
+    e.respondWith(new Promise(resolve => {
+      let settled = false;
+      const networkFetch = fetch(e.request).then(resp => {
         if (resp && resp.status === 200 && e.request.method === 'GET') {
-          const toCache = resp.clone();
-          caches.open(CACHE_NAME).then(c => c.put(e.request, toCache));
+          caches.open(CACHE_NAME).then(c => c.put(e.request, resp.clone()));
         }
+        if (!settled) { settled = true; resolve(resp); }
         return resp;
-      }).catch(() => caches.match(e.request).then(cached => cached || caches.match('/index.html')))
-    );
+      }).catch(() => null);
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        caches.match(e.request).then(cached => {
+          if (settled) return;
+          if (cached) { settled = true; resolve(cached); }
+          // Sem cache ainda (primeira visita): espera a rede terminar mesmo.
+        });
+      }, NETWORK_TIMEOUT_MS);
+
+      networkFetch.then(resp => {
+        clearTimeout(timer);
+        if (!settled && !resp) {
+          // Rede falhou e nada resolveu ainda: cai pro cache ou index.html.
+          caches.match(e.request).then(cached => {
+            settled = true;
+            resolve(cached || caches.match('/index.html'));
+          });
+        }
+      });
+    }));
     return;
   }
 
