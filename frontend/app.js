@@ -715,7 +715,7 @@
     if(!state._cliCidade) state._cliCidade="";
 
     const cidadesClientes=resource==="clientes"
-      ?[...new Set(rawItems.map(it=>String(it.cidade||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"))
+      ?[...new Set(rawItems.map(it=>String(it.cidade||"").trim().toUpperCase()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"))
       :[];
 
     const getFiltered=()=>{
@@ -724,7 +724,7 @@
       // Filtro de período — usa filtrarPorPeriodoGen que trata data_especifica também
       if(resource==="pedidos")  items=filtrarPorPeriodoGen(items,"data","_pedFiltro");
       if(resource==="lembretes") items=filtrarPorPeriodoGen(items,"data","_lemFiltro");
-      if(resource==="clientes"&&state._cliCidade) items=items.filter(it=>String(it.cidade||"").trim()===state._cliCidade);
+      if(resource==="clientes"&&state._cliCidade) items=items.filter(it=>String(it.cidade||"").trim().toUpperCase()===state._cliCidade);
       return !q?items:items.filter(it=>Object.values(it||{}).some(v=>String(v??"").toLowerCase().includes(q)));
     };
 
@@ -753,6 +753,10 @@
             ${cidadesClientes.map(c=>`<option value="${esc(c)}" ${state._cliCidade===c?"selected":""}>${esc(c)}</option>`).join("")}
           </select>
           <button id="cli-disparo-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(37,211,102,.12);border-color:rgba(37,211,102,.35);color:#25d366;">📢 Disparar mensagem</button>
+        </div>`:""}
+        ${resource==="rotas"?`
+        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+          <button id="rota-montar-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(68,136,255,.08);border-color:rgba(68,136,255,.25);color:var(--blue);">🗺️ Montar rota por cidade</button>
         </div>`:""}
         ${resource==="mercadorias"?`
         <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center;">
@@ -787,6 +791,9 @@
     $("#sv-refresh-btn")?.addEventListener("click",async()=>{
       await runWithUi(async()=>{await loadResource(resource);renderCrudScreen(root,resource);toast("Atualizado.","success");},"Atualizando...");
     });
+    if(resource==="rotas"){
+      $("#rota-montar-btn")?.addEventListener("click",()=>abrirMontarRotaCidade());
+    }
 
     // Filtro de período — pedidos
     if(resource==="pedidos"){
@@ -1042,6 +1049,102 @@
     renderListaDisparo();
     mo.querySelector("#disp-close")?.addEventListener("click",()=>mo.remove());
     mo.addEventListener("click",e=>{if(e.target===mo)mo.remove();});
+  }
+
+  // ─── Montar rota por cidade (tela Rotas) ───────────────────────────────────
+  // Seleciona cidade → lista clientes daquela cidade → seleciona quais visitar →
+  // monta um roteiro ordenado por bairro/endereço (heurística sem geocodificação,
+  // rápida e sem depender de serviço externo) + link pronto do Google Maps com
+  // todas as paradas na ordem sugerida.
+  function abrirMontarRotaCidade(){
+    const clientes=safeArray(state.cache.clientes);
+    const cidades=[...new Set(clientes.map(c=>String(c.cidade||"").trim().toUpperCase()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"));
+    if(!cidades.length){toast("Nenhum cliente com cidade cadastrada ainda.","warning");return;}
+
+    const mo=document.createElement("div");
+    mo.style.cssText="position:fixed;inset:0;z-index:2100;background:rgba(0,0,0,.7);display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;";
+    mo.innerHTML=`
+      <div style="background:var(--bg);border-radius:16px;padding:20px;width:100%;max-width:480px;max-height:88vh;overflow-y:auto;margin:auto;display:flex;flex-direction:column;gap:10px;">
+        <div style="font-size:15px;font-weight:700;">🗺️ Montar rota por cidade</div>
+        <select id="rota-cid-sel" style="width:100%;padding:10px 12px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:13px;">
+          <option value="">Selecione a cidade...</option>
+          ${cidades.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("")}
+        </select>
+        <div id="rota-cli-area"></div>
+      </div>`;
+    document.body.appendChild(mo);
+    mo.addEventListener("click",e=>{if(e.target===mo)mo.remove();});
+
+    function renderClientesDaCidade(cidade){
+      const area=mo.querySelector("#rota-cli-area");
+      if(!cidade){area.innerHTML="";return;}
+      const lista=clientes.filter(c=>String(c.cidade||"").trim().toUpperCase()===cidade);
+      if(!lista.length){area.innerHTML=`<div style="font-size:12px;color:var(--muted);padding:10px 0;">Nenhum cliente cadastrado em ${esc(cidade)}.</div>`;return;}
+      area.innerHTML=`
+        <div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0;">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);">
+            <input type="checkbox" id="rota-sel-todos"/> Selecionar todos (${lista.length})
+          </label>
+        </div>
+        <div id="rota-cli-lista" style="display:flex;flex-direction:column;gap:6px;max-height:38vh;overflow-y:auto;"></div>
+        <button id="rota-gerar-btn" class="btn btn-primary" style="width:100%;margin-top:8px;">🧭 Gerar roteiro otimizado</button>
+        <div id="rota-resultado"></div>`;
+      const listaEl=area.querySelector("#rota-cli-lista");
+      listaEl.innerHTML=lista.map((c,i)=>`
+        <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;cursor:pointer;">
+          <input type="checkbox" class="rota-cli-chk" data-idx="${i}"/>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;">${esc(c.nome||"(sem nome)")}</div>
+            <div style="font-size:11px;color:var(--muted);">${esc(c.bairro||"—")} · ${esc(c.endereco||"sem endereço")}</div>
+          </div>
+        </label>`).join("");
+
+      area.querySelector("#rota-sel-todos")?.addEventListener("change",e=>{
+        listaEl.querySelectorAll(".rota-cli-chk").forEach(chk=>chk.checked=e.target.checked);
+      });
+
+      area.querySelector("#rota-gerar-btn")?.addEventListener("click",()=>{
+        const idxs=[...listaEl.querySelectorAll(".rota-cli-chk:checked")].map(chk=>Number(chk.getAttribute("data-idx")));
+        if(!idxs.length){toast("Selecione ao menos um cliente.","warning");return;}
+        const selecionados=idxs.map(i=>lista[i]);
+        // Heurística de ordenação: agrupa por bairro e depois por endereço,
+        // reduzindo idas e vindas dentro da mesma cidade sem precisar geocodificar.
+        const ordenados=[...selecionados].sort((a,b)=>{
+          const ba=String(a.bairro||"").trim().toUpperCase(), bb=String(b.bairro||"").trim().toUpperCase();
+          if(ba!==bb) return ba.localeCompare(bb,"pt-BR");
+          return String(a.endereco||"").trim().localeCompare(String(b.endereco||"").trim(),"pt-BR");
+        });
+
+        const enderecoCompleto=c=>[c.endereco,c.bairro,cidade,"Brasil"].filter(Boolean).join(", ");
+        const roteiroTexto=`ROTA — ${cidade} (${ordenados.length} paradas)\n\n`+
+          ordenados.map((c,i)=>`${i+1}. ${c.nome||"(sem nome)"} — ${enderecoCompleto(c)}${c.telefone?` — ${c.telefone}`:""}`).join("\n");
+        const mapsUrl="https://www.google.com/maps/dir/"+ordenados.map(c=>encodeURIComponent(enderecoCompleto(c))).join("/");
+
+        const res=area.querySelector("#rota-resultado");
+        res.innerHTML=`
+          <div style="margin-top:10px;padding:12px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;gap:8px;">
+            <div style="font-size:12px;font-weight:600;color:var(--blue);">Ordem sugerida (por bairro/endereço):</div>
+            <div style="display:flex;flex-direction:column;gap:4px;max-height:26vh;overflow-y:auto;">
+              ${ordenados.map((c,i)=>`<div style="font-size:12px;">${i+1}. ${esc(c.nome||"")} <span style="color:var(--muted);">— ${esc(c.bairro||"")}</span></div>`).join("")}
+            </div>
+            <a href="${mapsUrl}" target="_blank" rel="noopener" class="btn btn-secondary" style="width:auto;text-align:center;text-decoration:none;">🗺️ Abrir rota no Google Maps</a>
+            <button id="rota-usar-btn" class="btn btn-primary" style="width:auto;">✅ Criar rota com este roteiro</button>
+          </div>`;
+        res.querySelector("#rota-usar-btn")?.addEventListener("click",()=>{
+          mo.remove();
+          renderForm("rotas",null);
+          setTimeout(()=>{
+            const obsEl=document.querySelector("#sv-form-wrap [name='obs']");
+            const dataEl=document.querySelector("#sv-form-wrap [name='data']");
+            if(obsEl) obsEl.value=roteiroTexto;
+            if(dataEl&&!dataEl.value) dataEl.value=new Date().toISOString().slice(0,10);
+            document.getElementById("sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"});
+          },60);
+        });
+      });
+    }
+
+    mo.querySelector("#rota-cid-sel")?.addEventListener("change",e=>renderClientesDaCidade(e.target.value));
   }
 
   function getBadgeClass(status){
@@ -3173,7 +3276,7 @@
       const lista=document.getElementById("sv-vis-lista"); if(!lista) return;
       const q=String(document.getElementById("sv-vis-busca")?.value||"").toLowerCase();
       let filtradas=getFiltradasPorPeriodo();
-      if(state._visCidade) filtradas=filtradas.filter(v=>String(v.cidade||"").trim()===state._visCidade);
+      if(state._visCidade) filtradas=filtradas.filter(v=>String(v.cidade||"").trim().toUpperCase()===state._visCidade);
       if(q) filtradas=filtradas.filter(v=>
         String(v.nome||"").toLowerCase().includes(q)||String(v.telefone||"").toLowerCase().includes(q)||
         String(v.cidade||"").toLowerCase().includes(q)||String(v.obs||"").toLowerCase().includes(q)
@@ -3943,7 +4046,7 @@
       <div id="sv-vis-filtro-cidade-wrap" style="display:flex;gap:6px;margin:0 0 8px;flex-wrap:wrap;align-items:center;${state._visTab!=="lista"?"display:none":""}">
         <select id="vis-filtro-cidade" style="flex:1;min-width:140px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;">
           <option value="">📍 Todas as cidades</option>
-          ${[...new Set(visitas.map(v=>String(v.cidade||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR")).map(c=>`<option value="${esc(c)}" ${state._visCidade===c?"selected":""}>${esc(c)}</option>`).join("")}
+          ${[...new Set(visitas.map(v=>String(v.cidade||"").trim().toUpperCase()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR")).map(c=>`<option value="${esc(c)}" ${state._visCidade===c?"selected":""}>${esc(c)}</option>`).join("")}
         </select>
         <button id="vis-disparo-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(37,211,102,.12);border-color:rgba(37,211,102,.35);color:#25d366;">📢 Disparar mensagem</button>
       </div>
@@ -3954,7 +4057,7 @@
     // Carregar e renderizar
     function atualizarSeletorCidadeVisitas(){
       const sel=document.getElementById("vis-filtro-cidade"); if(!sel) return;
-      const cidades=[...new Set(visitas.map(v=>String(v.cidade||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"));
+      const cidades=[...new Set(visitas.map(v=>String(v.cidade||"").trim().toUpperCase()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"));
       sel.innerHTML=`<option value="">📍 Todas as cidades</option>${cidades.map(c=>`<option value="${esc(c)}" ${state._visCidade===c?"selected":""}>${esc(c)}</option>`).join("")}`;
     }
     await runWithUi(async()=>{
@@ -3974,7 +4077,7 @@
     });
     document.getElementById("vis-disparo-btn")?.addEventListener("click",()=>{
       const alvos=getFiltradasPorPeriodo()
-        .filter(v=>!state._visCidade||String(v.cidade||"").trim()===state._visCidade)
+        .filter(v=>!state._visCidade||String(v.cidade||"").trim().toUpperCase()===state._visCidade)
         .map(v=>({nome:v.nome,telefone:v.telefone,cidade:v.cidade}));
       abrirDisparoWhatsApp(alvos,state._visCidade||"todas as cidades");
     });
