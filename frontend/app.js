@@ -5097,7 +5097,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
             </div>
             ${jaTem
               ?`<span style="font-size:11px;color:var(--amber);flex-shrink:0;">já importado</span>`
-              :`<button class="btn btn-primary" style="font-size:12px;padding:5px 10px;flex-shrink:0;" data-merc-id="${esc(m.id||m._id||"")}">+ Adicionar</button>`
+              :`<button class="btn btn-primary" style="width:auto;font-size:12px;padding:5px 10px;flex-shrink:0;" data-merc-id="${esc(m.id||m._id||"")}">+ Adicionar</button>`
             }
           </div>`;
         }).join("");
