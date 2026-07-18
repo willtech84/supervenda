@@ -1542,6 +1542,43 @@ Exemplo: [{"nome":"CHAVE FENDA 5MM","codigo":"CF5","marca":"TRAMONTINA","valor_c
       }
 
       // Itens de uma tabela de estoque
+      if (p[1] === "estoque-itens" && p[2] === "bulk") {
+        if (req.method === "POST") {
+          const body = await readJson<any>(req);
+          const tabelaId = body.tabela_id || "";
+          const itens: any[] = Array.isArray(body.itens) ? body.itens : [];
+          if (!tabelaId) return bad("tabela_id é obrigatório.", 400);
+          if (!itens.length) return bad("Nenhum item enviado.", 400);
+
+          const ts = nowISO();
+          const stmts = itens.map((item, idx) => {
+            const id = "EI-" + String(Date.now()).slice(-8) + Math.random().toString(36).slice(2, 5).toUpperCase() + idx;
+            return env.DB.prepare(
+              `INSERT INTO estoque_itens (id,vendor_id,tabela_id,codigo,produto,quantidade,quantidade_min,valor_unit,unidade,obs,bloqueado,bloqueado_por,bloqueado_motivo,ordem,updated_at,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+            ).bind(
+              id, effectiveVendorId, tabelaId,
+              item.codigo || "", item.produto || "",
+              Number(item.quantidade || 0), Number(item.quantidade_min || 0),
+              Number(item.valor_unit || 0),
+              item.unidade || "UN", item.obs || "",
+              0, "", "", Number(item.ordem || 0),
+              ts, ts
+            );
+          });
+
+          // D1 batch runs statements in one round-trip. Chunk to stay under D1's per-batch limits.
+          const CHUNK = 100;
+          let inserted = 0;
+          for (let i = 0; i < stmts.length; i += CHUNK) {
+            const chunk = stmts.slice(i, i + CHUNK);
+            await env.DB.batch(chunk);
+            inserted += chunk.length;
+          }
+          return json({ inserted });
+        }
+      }
+
       if (p[1] === "estoque-itens") {
         if (req.method === "GET") {
           const url2 = new URL(req.url);

@@ -5320,15 +5320,27 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
           const ok=confirm(`Importar ${novos.length} item(ns) para a tabela "${tabelas.find(t=>t.id===tabelaAtiva)?.titulo||""}"?`);
           if(!ok) return;
           await runWithUi(async()=>{
+            const BATCH=100;
             let count=0;
-            for(const item of novos){
+            const falhas=[];
+            for(let i=0;i<novos.length;i+=BATCH){
+              const lote=novos.slice(i,i+BATCH);
+              setLoading(true,`Importando ${Math.min(i+BATCH,novos.length)}/${novos.length}...`);
               try{
-                const novo=await DB.request("/api/estoque-itens",{method:"POST",body:JSON.stringify(item)});
-                if(novo?.id){if(!itensPorTabela[tabelaAtiva])itensPorTabela[tabelaAtiva]=[];itensPorTabela[tabelaAtiva].push({...item,id:novo.id,bloqueado:0});count++;}
-              }catch(e){console.warn("Erro ao importar item:",e?.message);}
+                const resp=await DB.request("/api/estoque-itens/bulk",{method:"POST",body:JSON.stringify({tabela_id:tabelaAtiva,itens:lote})});
+                const n=resp?.inserted||0;
+                count+=n;
+                if(!itensPorTabela[tabelaAtiva])itensPorTabela[tabelaAtiva]=[];
+                for(const item of lote) itensPorTabela[tabelaAtiva].push({...item,id:"tmp-"+Math.random().toString(36).slice(2),bloqueado:0});
+              }catch(e){console.warn("Erro ao importar lote:",e?.message);falhas.push(...lote.map(x=>x.produto));}
+            }
+            if(count>0){
+              // refetch to get real IDs from server since bulk insert doesn't return them per-item
+              try{const rows=await DB.request(`/api/estoque-itens?tabela_id=${encodeURIComponent(tabelaAtiva)}`);itensPorTabela[tabelaAtiva]=rows||[];}catch{}
             }
             renderTabelaItens();
-            toast(`✅ ${count} item(ns) importado(s).`,"success");
+            if(falhas.length) toast(`⚠️ ${count} importado(s), ${falhas.length} falharam.`,"warning",6000);
+            else toast(`✅ ${count} item(ns) importado(s).`,"success");
           },"Importando...");
         }catch(e){toast("Erro ao ler arquivo: "+e.message,"error");}
       };
