@@ -859,11 +859,11 @@
 
         const processRows=async(rows)=>{
           if(!rows.length){toast("Arquivo vazio ou sem dados reconhecíveis.","warning");return;}
-          const ok=[];const erros=[];
+          const itens=[];const erros=[];
           for(const row of rows){
             const nome=String(row.nome||row.Produto||row.produto||row.NOME||"").trim().toUpperCase();
             if(!nome){erros.push("Linha sem nome ignorada");continue;}
-            const payload={
+            itens.push({
               nome, produto:nome,
               marca:String(row.marca||row.Marca||"").toUpperCase(),
               categoria:String(row.categoria||row.Categoria||"").toUpperCase(),
@@ -877,17 +877,21 @@
               valorVenda:Number(String(row.valor_venda||row.valorVenda||0).replace(",","."))||0,
               estoqueAtual:Number(row.estoque||row.estoqueAtual||0)||0,
               sku:String(row.codigo||row.sku||""),
-            };
+            });
+          }
+          const BATCH=200;let ok=0;
+          for(let i=0;i<itens.length;i+=BATCH){
+            const lote=itens.slice(i,i+BATCH);
+            setLoading(true,`Importando ${Math.min(i+BATCH,itens.length)}/${itens.length}...`);
             try{
-              const existente=rawItems.find(m=>String(m.nome||m.produto||"").toUpperCase()===nome);
-              if(existente) await DB.update("mercadorias",getId(existente),payload);
-              else await DB.create("mercadorias",payload);
-              ok.push(nome);
-            }catch(err){erros.push(`${nome}: ${err?.message||"erro"}`);}
+              const resp=await DB.request("/api/mercadorias/bulk",{method:"POST",body:JSON.stringify({itens:lote})});
+              ok+=resp?.ok||0;
+              if(resp?.erros) erros.push(`${resp.erros} linha(s) inválida(s) no lote`);
+            }catch(err){erros.push(`Lote ${i+1}-${i+lote.length}: ${err?.message||"erro"}`);}
           }
           await loadResource("mercadorias");
           renderCrudScreen(root,"mercadorias");
-          toast(`✅ ${ok.length} produto${ok.length!==1?"s":""} importado${ok.length!==1?"s":""}${erros.length?` · ⚠️ ${erros.length} erro(s)`:""}`, ok.length?"success":"warning", 6000);
+          toast(`✅ ${ok} produto${ok!==1?"s":""} importado${ok!==1?"s":""}${erros.length?` · ⚠️ ${erros.length} erro(s)`:""}`, ok?"success":"warning", 6000);
           if(erros.length) console.warn("Erros na importação:",erros);
         };
 

@@ -669,6 +669,86 @@ export default {
       }
 
       /** =================== PRODUTOS / MERCADORIAS =================== **/
+      if ((p[1] === "produtos" || p[1] === "mercadorias") && p[2] === "bulk") {
+        if (!await temPermissao("mercadorias","criar")) return bad("Sem permissão para importar mercadorias.", 403);
+        if (req.method === "POST") {
+          const table = "produtos";
+          const body = await readJson<any>(req);
+          const itens: any[] = Array.isArray(body.itens) ? body.itens : [];
+          if (!itens.length) return bad("Nenhum item enviado.", 400);
+
+          // Carrega existentes uma vez só, pra decidir insert vs update por nome (igual ao client antigo)
+          const existentesRows = await env.DB.prepare(
+            `SELECT id, produto FROM ${table} WHERE vendor_id=?`
+          ).bind(effectiveVendorId).all<any>();
+          const existentesPorNome = new Map<string, string>();
+          for (const r of existentesRows.results || []) {
+            existentesPorNome.set(String(r.produto || "").toUpperCase(), r.id);
+          }
+
+          // Reserva um bloco de IDs de uma vez (evita N leituras sequenciais do counter)
+          const novosNecessarios = itens.filter(it =>
+            !existentesPorNome.has(String(it.produto || it.nome || "").toUpperCase())
+          ).length;
+          let counterRow = await env.DB.prepare(
+            "SELECT value FROM counters WHERE vendor_id=? AND kind='produto'"
+          ).bind(effectiveVendorId).first<{ value: number }>();
+          let nextCounter = (counterRow?.value ?? 0);
+          if (novosNecessarios > 0) {
+            await env.DB.prepare(
+              `INSERT INTO counters (vendor_id, kind, value) VALUES (?,?,?)
+               ON CONFLICT(vendor_id,kind) DO UPDATE SET value=excluded.value`
+            ).bind(effectiveVendorId, "produto", nextCounter + novosNecessarios).run();
+          }
+
+          const ts = nowISO();
+          const stmts = [];
+          let erros = 0;
+          for (const it of itens) {
+            const nomeProduto = String(it.produto || it.nome || "").trim();
+            if (!nomeProduto) { erros++; continue; }
+            const nomeKey = nomeProduto.toUpperCase();
+            let id = existentesPorNome.get(nomeKey);
+            if (!id) {
+              nextCounter++;
+              id = "PR" + String(nextCounter).padStart(5, "0");
+              existentesPorNome.set(nomeKey, id);
+            }
+            stmts.push(env.DB.prepare(
+              `INSERT INTO ${table}
+                (id,vendor_id,marca,produto,modelo,descricao,categoria,sku,agregados,valorCompra,valorVenda,estoqueAtual,estoqueMin,local,status,updated_at,created_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              ON CONFLICT(id) DO UPDATE SET
+                marca=excluded.marca, produto=excluded.produto, modelo=excluded.modelo,
+                descricao=excluded.descricao, categoria=excluded.categoria, sku=excluded.sku,
+                agregados=excluded.agregados, valorCompra=excluded.valorCompra, valorVenda=excluded.valorVenda,
+                estoqueAtual=excluded.estoqueAtual, estoqueMin=excluded.estoqueMin,
+                local=excluded.local, status=excluded.status, updated_at=excluded.updated_at`
+            ).bind(
+              id, effectiveVendorId,
+              String(it.marca || "").toUpperCase(), nomeProduto,
+              it.modelo || "", it.descricao || "", String(it.categoria || "").toUpperCase(),
+              String(it.sku || it.codigo || "").toUpperCase(),
+              it.agregados || "",
+              Number(it.valorCompra ?? it.valor_compra ?? 0),
+              Number(it.valorVenda ?? it.valor_venda ?? 0),
+              Number(it.estoqueAtual ?? it.estoque ?? 0),
+              Number(it.estoqueMin ?? 0),
+              it.local || "", it.status || "ativo",
+              ts, ts
+            ));
+          }
+
+          const CHUNK = 100;
+          let ok = 0;
+          for (let i = 0; i < stmts.length; i += CHUNK) {
+            await env.DB.batch(stmts.slice(i, i + CHUNK));
+            ok += Math.min(CHUNK, stmts.length - i);
+          }
+          return json({ ok, erros });
+        }
+      }
+
       if (p[1] === "produtos" || p[1] === "mercadorias") {
         if (!await temPermissao("mercadorias","ver")) return bad("Sem permissão para acessar mercadorias.", 403);
         const table = "produtos";
