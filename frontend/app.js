@@ -25,6 +25,10 @@
   function esc(v) {
     return String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
+  function debounce(fn, wait=200) {
+    let t;
+    return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), wait); };
+  }
   function moneyBR(v) {
     const n=Number(v||0); return isNaN(n)?String(v??""):n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
   }
@@ -1737,7 +1741,7 @@
       document.addEventListener("click",e=>{if(!wrap.contains(e.target))acDrop.style.display="none";});
     }
 
-    wrap.querySelector("#ped-cat-search")?.addEventListener("input",e=>renderCatalogo(e.target.value));
+    wrap.querySelector("#ped-cat-search")?.addEventListener("input",debounce(e=>renderCatalogo(e.target.value),200));
     wrap.querySelector("#ped-add-manual")?.addEventListener("click",()=>addItemManual(false));
     wrap.querySelector("#ped-add-salvar-merc")?.addEventListener("click",()=>addItemManual(true));
     $("#sv-close-form")?.addEventListener("click",()=>{wrap.innerHTML="";});
@@ -5111,7 +5115,7 @@
     });
 
     // Busca
-    document.getElementById("sv-est-busca")?.addEventListener("input",renderTabelaItens);
+    document.getElementById("sv-est-busca")?.addEventListener("input",debounce(renderTabelaItens,200));
 
     // Refresh
     document.getElementById("est-refresh")?.addEventListener("click",async()=>{
@@ -5195,7 +5199,10 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
           lista.innerHTML=`<div style="padding:16px;text-align:center;color:var(--muted);">Nenhum resultado.</div>`;
           return;
         }
-        lista.innerHTML=filtradas.map(m=>{
+        const LIMITE=50;
+        const truncado=filtradas.length>LIMITE;
+        const paraExibir=truncado?filtradas.slice(0,LIMITE):filtradas;
+        lista.innerHTML=(truncado?`<div style="padding:6px 4px;text-align:center;color:var(--muted);font-size:11px;">Mostrando ${LIMITE} de ${filtradas.length} — refine a busca para ver mais</div>`:"")+paraExibir.map(m=>{
           const jaTem=itensAtuais.some(i=>i.codigo&&String(i.codigo).toUpperCase()===String(m.codigo||m.sku||"").toUpperCase());
           return`<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;${jaTem?"opacity:.5":""}">
             <div style="flex:1;min-width:0;">
@@ -5253,7 +5260,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
       }
 
       // Input: filtrar SEM recriar o input
-      inp?.addEventListener("input",()=>renderLista());
+      inp?.addEventListener("input",debounce(()=>renderLista(),200));
       mo.querySelector("#est-merc-close")?.addEventListener("click",()=>mo.remove());
       mo.addEventListener("click",e=>{if(e.target===mo)mo.remove();});
 
