@@ -304,6 +304,14 @@
 
   async function list(resource) {
     const { data } = await requestAny(getResourcePaths(resource), { method: 'GET' });
+    // data===null significa falha de rede/timeout silenciosa (ver request()).
+    // Isso NÃO é "lista vazia" — lançar erro pra quem chamou manter o cache antigo
+    // em vez de sobrescrever com [] e o usuário ver os itens sumirem.
+    if (data === null) {
+      const err = new Error('Falha de rede ao carregar dados.');
+      err.network = true;
+      throw err;
+    }
     if (Array.isArray(data)) return data;
     if (Array.isArray(data?.items)) return data.items;
     if (Array.isArray(data?.data)) return data.data;
