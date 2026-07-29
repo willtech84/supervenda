@@ -4804,6 +4804,8 @@
     const user=DB.getUser();
     const isAdmin=user?.role==="admin";
     let tabelas=[], itensPorTabela={}, tabelaAtiva=state._estTabelaId||"";
+    let paginaAtual=1;
+    const PAGE_SIZE=150;
 
     async function carregarTabelas(){
       try{ tabelas=safeArray(await DB.request("/api/estoque-tabelas",{method:"GET"})); }
@@ -4828,6 +4830,12 @@
       const itens=itensPorTabela[tabelaAtiva]||[];
       const q=String(document.getElementById("sv-est-busca")?.value||"").toLowerCase();
       const filtrados=q?itens.filter(i=>String(i.produto||"").toLowerCase().includes(q)||String(i.codigo||"").toLowerCase().includes(q)):itens;
+
+      const totalPaginas=Math.max(1,Math.ceil(filtrados.length/PAGE_SIZE));
+      if(paginaAtual>totalPaginas) paginaAtual=totalPaginas;
+      if(paginaAtual<1) paginaAtual=1;
+      const inicioPag=(paginaAtual-1)*PAGE_SIZE;
+      const pageItens=filtrados.slice(inicioPag,inicioPag+PAGE_SIZE);
 
       const bloqueados=itens.filter(i=>Number(i.bloqueado));
 
@@ -4855,7 +4863,7 @@
               </tr>
             </thead>
             <tbody id="sv-est-tbody">
-              ${filtrados.map(item=>{
+              ${pageItens.map(item=>{
                 const bloq=Number(item.bloqueado);
                 const baixoEst=Number(item.quantidade)<=Number(item.quantidade_min)&&Number(item.quantidade_min)>0;
                 const rowBg=bloq?"rgba(255,82,82,.04)":baixoEst?"rgba(255,179,0,.04)":"";
@@ -4896,10 +4904,18 @@
         </div>
 
         <!-- Rodapé -->
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;font-size:12px;color:var(--muted);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;font-size:12px;color:var(--muted);flex-wrap:wrap;gap:8px;">
           <span>${filtrados.length} item${filtrados.length!==1?"ns":""}</span>
+          ${totalPaginas>1?`<div style="display:flex;align-items:center;gap:8px;">
+            <button id="sv-est-pag-prev" class="btn btn-secondary" style="font-size:11px;padding:4px 10px;width:auto;" ${paginaAtual<=1?"disabled":""}>‹ Anterior</button>
+            <span>Página ${paginaAtual} de ${totalPaginas}</span>
+            <button id="sv-est-pag-next" class="btn btn-secondary" style="font-size:11px;padding:4px 10px;width:auto;" ${paginaAtual>=totalPaginas?"disabled":""}>Próxima ›</button>
+          </div>`:""}
           <span style="color:var(--amber);">⚠️ Clique em qualquer valor para editar inline</span>
         </div>`;
+
+      cont.querySelector("#sv-est-pag-prev")?.addEventListener("click",()=>{paginaAtual--;renderTabelaItens();});
+      cont.querySelector("#sv-est-pag-next")?.addEventListener("click",()=>{paginaAtual++;renderTabelaItens();});
 
       bindTabelaEvents();
     }
@@ -4907,16 +4923,15 @@
     // ── Edição inline ────────────────────────────────────────────────────────
     function bindTabelaEvents(){
       const tbody=document.getElementById("sv-est-tbody"); if(!tbody) return;
+      if(tbody._delegado) return; // listener delegado já anexado — não reanexar a cada render
+      tbody._delegado=true;
 
-      // Edição inline ao clicar
-      tbody.querySelectorAll(".edit-cell").forEach(cell=>{
-        cell.style.cursor="pointer";
-        cell.style.padding="2px 4px";
-        cell.style.borderRadius="4px";
-        cell.style.transition="background .15s";
-        cell.addEventListener("mouseover",()=>{ cell.style.background="rgba(68,136,255,.1)"; });
-        cell.addEventListener("mouseout",()=>{ cell.style.background=""; });
-        cell.addEventListener("click",()=>{
+      tbody.addEventListener("click",async(e)=>{
+        const cell=e.target.closest(".edit-cell");
+        const btnBloq=e.target.closest(".btn-bloquear");
+        const btnDel=e.target.closest(".btn-del-item");
+
+        if(cell){
           const field=cell.getAttribute("data-field");
           const id=cell.getAttribute("data-id");
           const currentVal=cell.textContent.replace("—","").trim();
@@ -4942,14 +4957,12 @@
           };
           input.addEventListener("blur",salvar);
           input.addEventListener("keydown",e=>{if(e.key==="Enter")salvar();if(e.key==="Escape"){cell.textContent=currentVal||"—";}});
-        });
-      });
+          return;
+        }
 
-      // Bloquear/desbloquear
-      tbody.querySelectorAll(".btn-bloquear").forEach(btn=>{
-        btn.addEventListener("click",async()=>{
-          const id=btn.getAttribute("data-id");
-          const bloq=Number(btn.getAttribute("data-bloq"));
+        if(btnBloq){
+          const id=btnBloq.getAttribute("data-id");
+          const bloq=Number(btnBloq.getAttribute("data-bloq"));
           const novoBloquear=!bloq;
           let motivo="";
           if(novoBloquear){
@@ -4969,24 +4982,20 @@
                 bloqueado_por:novoBloquear?DB.getUser()?.name||"":""  ,
                 bloqueado_motivo:motivo};
             }
-            // Notificação de bloqueio para todos
             if(novoBloquear){
               const item=itens.find(x=>x.id===id);
               toast(`🔒 "${item?.produto||id}" bloqueado — ${motivo}`,"warning",7000);
-              // Registrar no estado para outros usuários verem ao sincronizar
               state._estUltimoBloquio={id,produto:item?.produto,motivo,por:DB.getUser()?.name,ts:Date.now()};
             } else {
               toast(`🔓 Item desbloqueado com sucesso.`,"success",3000);
             }
             renderTabelaItens();
           },novoBloquear?"Bloqueando...":"Desbloqueando...");
-        });
-      });
+          return;
+        }
 
-      // Excluir item
-      tbody.querySelectorAll(".btn-del-item").forEach(btn=>{
-        btn.addEventListener("click",async()=>{
-          const id=btn.getAttribute("data-id");
+        if(btnDel){
+          const id=btnDel.getAttribute("data-id");
           const itens=itensPorTabela[tabelaAtiva]||[];
           const item=itens.find(x=>x.id===id);
           if(!confirm(`Excluir "${item?.produto||id}"?`)) return;
@@ -4995,7 +5004,8 @@
             itensPorTabela[tabelaAtiva]=(itensPorTabela[tabelaAtiva]||[]).filter(x=>x.id!==id);
             renderTabelaItens();
           },"Excluindo...");
-        });
+          return;
+        }
       });
     }
 
@@ -5055,6 +5065,7 @@
           }
           tabelaAtiva=btn.getAttribute("data-tab-id");
           state._estTabelaId=tabelaAtiva;
+          paginaAtual=1;
           if(!itensPorTabela[tabelaAtiva]){
             await runWithUi(()=>carregarItens(tabelaAtiva),"Carregando...");
           }
@@ -5115,7 +5126,7 @@
     });
 
     // Busca
-    document.getElementById("sv-est-busca")?.addEventListener("input",debounce(renderTabelaItens,200));
+    document.getElementById("sv-est-busca")?.addEventListener("input",debounce(()=>{paginaAtual=1;renderTabelaItens();},200));
 
     // Refresh
     document.getElementById("est-refresh")?.addEventListener("click",async()=>{
