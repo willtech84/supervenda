@@ -1,5 +1,5 @@
-// SuperVenda Service Worker — Offline First v7
-const CACHE_NAME = 'supervenda-v7';
+// SuperVenda Service Worker — Offline First v8
+const CACHE_NAME = 'supervenda-v8';
 const OFFLINE_QUEUE_KEY = 'sv_offline_queue';
 
 // Arquivos para cachear (shell do app)

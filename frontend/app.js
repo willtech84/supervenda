@@ -717,6 +717,7 @@
     if(!state._pedFiltro) state._pedFiltro="tudo";
     if(!state._lemFiltro) state._lemFiltro="tudo";
     if(!state._cliCidade) state._cliCidade="";
+    let visibleLimit=150;
 
     const cidadesClientes=resource==="clientes"
       ?[...new Set(rawItems.map(it=>String(it.cidade||"").trim().toUpperCase()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR"))
@@ -778,17 +779,23 @@
       <div id="sv-form-wrap"></div>
       <div id="sv-list-wrap"></div>`;
 
-    // Busca instantânea — ao digitar a primeira letra já filtra
+    function doRenderList(f){
+      const shown=f.slice(0,visibleLimit);
+      renderList(resource,shown,rawItems,{total:f.length,onLoadMore:()=>{visibleLimit+=150;doRenderList(f);}});
+    }
+
+    // Busca instantânea (com debounce) — evita travar digitação em listas grandes
     const searchInput=$("#sv-search-input");
     if(searchInput){
       searchInput.focus();
-      searchInput.addEventListener("input",e=>{
+      searchInput.addEventListener("input",debounce(e=>{
         state.ui.search=e.target.value||"";
+        visibleLimit=150;
         const f=getFiltered();
         const cnt=$("#sv-count");
         if(cnt) cnt.textContent=`${f.length} registro${f.length!==1?"s":""}`;
-        renderList(resource,f,rawItems);
-      });
+        doRenderList(f);
+      },200));
     }
 
     $("#sv-new-btn")?.addEventListener("click",()=>{renderForm(resource,null);setTimeout(()=>$("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"}),60);});
@@ -807,9 +814,10 @@
           $$(".btn-pfiltro").forEach(b=>{b.className=b.className.replace("btn-primary","btn-secondary");});
           btn.className=btn.className.replace("btn-secondary","btn-primary");
           const f=getFiltered();
+          visibleLimit=150;
           const cnt=$("#sv-count");
           if(cnt) cnt.textContent=`${f.length} registro${f.length!==1?"s":""}`;
-          renderList(resource,f,rawItems);
+          doRenderList(f);
         });
       });
     }
@@ -817,9 +825,10 @@
     if(resource==="lembretes"){
       bindFiltroPeriodo("_lemFiltro",()=>{
         const f=getFiltered();
+        visibleLimit=150;
         const cnt=$("#sv-count");
         if(cnt) cnt.textContent=`${f.length} registro${f.length!==1?"s":""}`;
-        renderList(resource,f,rawItems);
+        doRenderList(f);
       });
     }
 
@@ -828,9 +837,10 @@
       $("#cli-filtro-cidade")?.addEventListener("change",e=>{
         state._cliCidade=e.target.value||"";
         const f=getFiltered();
+        visibleLimit=150;
         const cnt=$("#sv-count");
         if(cnt) cnt.textContent=`${f.length} registro${f.length!==1?"s":""}`;
-        renderList(resource,f,rawItems);
+        doRenderList(f);
       });
       $("#cli-disparo-btn")?.addEventListener("click",()=>{
         const alvos=getFiltered().map(it=>({nome:it.nome,telefone:it.telefone,cidade:it.cidade}));
@@ -923,12 +933,12 @@
       $("#sv-fotonota-btn")?.addEventListener("click",()=>abrirFotoNotaMercadorias(root,rawItems));
     }
 
-    renderList(resource,getFiltered(),rawItems);
+    doRenderList(getFiltered());
   }
 
   function urgenciaColor(v){const s=String(v||"").toLowerCase();return s==="alta"?"var(--red)":s==="média"?"var(--amber)":s==="baixa"?"var(--blue)":"var(--muted)";}
 
-  function renderList(resource,items,rawItems){
+  function renderList(resource,items,rawItems,opts){
     const wrap=$("#sv-list-wrap"),schema=SCHEMAS[resource]; if(!wrap) return;
     if(!items.length){wrap.innerHTML=`<div class="empty-state"><div class="empty-icon">${schema.icon}</div><div class="empty-text">Nenhum registro encontrado.<br>Clique em "+ Novo" para adicionar.</div></div>`;return;}
 
@@ -973,32 +983,45 @@
       </div>`;
     }).join("");
 
-    // Click no nome ou botão "Ver detalhes" do cliente
-    $$("[data-cliente-id],[data-cliente-ver]",wrap).forEach(el=>{
-      el.addEventListener("click",()=>{
-        const id=el.getAttribute("data-cliente-id")||el.getAttribute("data-cliente-ver");
-        state._clienteId=id;
-        renderCurrent();
-        $("#sv-screen-root")?.scrollIntoView({behavior:"smooth",block:"start"});
-      });
-    });
+    if(opts&&opts.total>items.length){
+      wrap.innerHTML+=`<button id="sv-load-more" class="btn btn-secondary" style="width:100%;margin-top:8px;font-size:13px;">Carregar mais (${items.length} de ${opts.total})</button>`;
+      $("#sv-load-more",wrap)?.addEventListener("click",()=>opts.onLoadMore&&opts.onLoadMore());
+    }
 
-    $$("[data-action='edit']",wrap).forEach(btn=>{
-      btn.addEventListener("click",()=>{
-        const id=btn.getAttribute("data-id");
-        const item=rawItems.find(x=>String(getId(x))===String(id));
-        renderForm(resource,item||null);
-        setTimeout(()=>$("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"}),60);
+    // Delegação de evento — 1 listener no container, em vez de 1 por item
+    if(!wrap._delegado){
+      wrap._delegado=true;
+      wrap.addEventListener("click",async(e)=>{
+        const cliEl=e.target.closest("[data-cliente-id],[data-cliente-ver]");
+        const editBtn=e.target.closest("[data-action='edit']");
+        const delBtn=e.target.closest("[data-action='delete']");
+
+        if(cliEl){
+          const id=cliEl.getAttribute("data-cliente-id")||cliEl.getAttribute("data-cliente-ver");
+          state._clienteId=id;
+          renderCurrent();
+          $("#sv-screen-root")?.scrollIntoView({behavior:"smooth",block:"start"});
+          return;
+        }
+        if(editBtn){
+          const id=editBtn.getAttribute("data-id");
+          const item=wrap._rawItems.find(x=>String(getId(x))===String(id));
+          renderForm(wrap._resource,item||null);
+          setTimeout(()=>$("#sv-form-wrap")?.scrollIntoView({behavior:"smooth",block:"start"}),60);
+          return;
+        }
+        if(delBtn){
+          const id=delBtn.getAttribute("data-id");
+          if(!id||!confirm("Excluir este registro?")) return;
+          const apiR=wrap._resource==="anotacoes"?"notas":wrap._resource;
+          await runWithUi(async()=>{await DB.remove(apiR,id);await loadResource(wrap._resource);renderCurrent();toast("Excluído.","success");},"Excluindo...");
+          return;
+        }
       });
-    });
-    $$("[data-action='delete']",wrap).forEach(btn=>{
-      btn.addEventListener("click",async()=>{
-        const id=btn.getAttribute("data-id");
-        if(!id||!confirm("Excluir este registro?")) return;
-        const apiR=resource==="anotacoes"?"notas":resource;
-        await runWithUi(async()=>{await DB.remove(apiR,id);await loadResource(resource);renderCurrent();toast("Excluído.","success");},"Excluindo...");
-      });
-    });
+    }
+    // Dados atuais acessíveis ao handler delegado (atualizados a cada render)
+    wrap._rawItems=rawItems;
+    wrap._resource=resource;
   }
 
   // ─── Disparo de mensagem em massa (WhatsApp) ───────────────────────────────
