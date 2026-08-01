@@ -911,15 +911,25 @@
 
         if(ext==="csv"){
           const text=await file.text();
-          const lines=text.replace(/\r/g,"").split("\n").filter(l=>l.trim());
-          if(lines.length<2){toast("CSV sem dados.","warning");return;}
-          const sep=lines[0].includes(";")?";":lines[0].includes("\t")?"\t":",";
-          const headers=lines[0].split(sep).map(h=>h.trim().replace(/^"|"$/g,""));
-          const rows=lines.slice(1).map(line=>{
-            const vals=line.split(sep).map(v=>v.trim().replace(/^"|"$/g,""));
-            const obj={};headers.forEach((h,i)=>obj[h]=vals[i]||"");return obj;
+          const allLines=text.replace(/\r/g,"").split("\n").filter(l=>l.trim());
+          if(!allLines.length){toast("CSV sem dados.","warning");return;}
+          const sep=allLines[0].includes(";")?";":allLines[0].includes("\t")?"\t":",";
+          const parseCsvLine=(line)=>{
+            // Parser simples que respeita valores entre aspas contendo o separador
+            const out=[];let cur="";let inQ=false;
+            for(let i=0;i<line.length;i++){
+              const c=line[i];
+              if(c==='"'){ if(inQ&&line[i+1]==='"'){cur+='"';i++;} else inQ=!inQ; }
+              else if(c===sep&&!inQ){ out.push(cur.trim()); cur=""; }
+              else cur+=c;
+            }
+            out.push(cur.trim());
+            return out;
+          };
+          const linesSplit=allLines.map(parseCsvLine);
+          abrirMapeamentoCsv(linesSplit,async(mappedRows)=>{
+            await runWithUi(()=>processRows(mappedRows),"Importando CSV...");
           });
-          await runWithUi(()=>processRows(rows),"Importando CSV...");
         } else {
           // Excel via FileReader + parse manual simplificado (sem lib)
           toast("Para Excel, salve como CSV (separado por ponto-e-vírgula) e importe novamente. O CSV é compatível com Excel.","warning",6000);
@@ -1024,8 +1034,121 @@
     wrap._resource=resource;
   }
 
-  // ─── Disparo de mensagem em massa (WhatsApp) ───────────────────────────────
-  // Abre um modal com a lista de destinatários; cada envio é um clique real do
+  // ─── Mapeamento de colunas para importação de CSV em qualquer formato ─────
+  const CAMPOS_IMPORT_MERC=[
+    {key:"nome",       label:"Nome do produto", obrigatorio:true,  aliases:["nome","produto","item","mercadoria","descricao do produto"]},
+    {key:"codigo",     label:"Código / SKU",     obrigatorio:false, aliases:["codigo","código","sku","cod","referencia","referência","ref","cod produto","cod. produto"]},
+    {key:"marca",      label:"Marca",            obrigatorio:false, aliases:["marca","fabricante"]},
+    {key:"categoria",  label:"Categoria",        obrigatorio:false, aliases:["categoria","tipo","grupo","categoria produto"]},
+    {key:"valor_compra",label:"Valor de compra", obrigatorio:false, aliases:["valor_compra","valor compra","preco compra","preço compra","custo","compra"]},
+    {key:"valor_venda", label:"Valor de venda",  obrigatorio:false, aliases:["valor_venda","valor venda","preco venda","preço venda","preco","preço","venda"]},
+    {key:"estoque",    label:"Estoque atual",    obrigatorio:false, aliases:["estoque","estoque atual","qtd","quantidade","saldo"]},
+    {key:"estoqueMin", label:"Estoque mínimo",   obrigatorio:false, aliases:["estoque minimo","estoque mínimo","min","minimo","mínimo"]},
+    {key:"descricao",  label:"Descrição / obs.", obrigatorio:false, aliases:["descricao","descrição","obs","observacao","observação","detalhes"]},
+  ];
+  function _normStr(s){
+    return String(s??"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
+  }
+  function _guessMapeamentoCsv(headers){
+    const norm=headers.map(_normStr), usados=new Set(), mapping={};
+    CAMPOS_IMPORT_MERC.forEach(campo=>{
+      let idx=-1;
+      // 1) igualdade exata
+      for(let i=0;i<norm.length;i++){ if(usados.has(i))continue; if(campo.aliases.some(a=>_normStr(a)===norm[i])){idx=i;break;} }
+      // 2) contém / está contido
+      if(idx===-1) for(let i=0;i<norm.length;i++){ if(usados.has(i))continue; if(campo.aliases.some(a=>{const na=_normStr(a);return norm[i].includes(na)||na.includes(norm[i]);})){idx=i;break;} }
+      mapping[campo.key]=idx; if(idx>=0) usados.add(idx);
+    });
+    return mapping;
+  }
+  /**
+   * linesSplit: array de arrays de strings (cada linha do CSV já dividida em colunas).
+   * onConfirm(rows): recebe um array de objetos {nome,codigo,marca,categoria,valor_compra,valor_venda,estoque,estoqueMin,descricao}
+   * já no formato que processRows() da tela de Mercadorias espera — funciona com CSV em qualquer layout de colunas.
+   */
+  function abrirMapeamentoCsv(linesSplit,onConfirm){
+    let temCabecalho=true;
+    const mo=document.createElement("div");
+    mo.style.cssText="position:fixed;inset:0;z-index:2100;background:rgba(0,0,0,.7);display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;";
+    document.body.appendChild(mo);
+
+    const getHeadersEDados=()=>{
+      if(temCabecalho) return {headers:linesSplit[0], dados:linesSplit.slice(1)};
+      const nCols=linesSplit[0]?.length||0;
+      return {headers:Array.from({length:nCols},(_,i)=>`Coluna ${i+1}`), dados:linesSplit};
+    };
+
+    let mapping=_guessMapeamentoCsv(getHeadersEDados().headers);
+
+    const render=()=>{
+      const {headers,dados}=getHeadersEDados();
+      const previewRows=dados.slice(0,4);
+      mo.innerHTML=`
+        <div style="background:var(--bg);border-radius:16px;padding:18px;width:100%;max-width:620px;max-height:92vh;overflow-y:auto;margin:auto;display:flex;flex-direction:column;gap:12px;">
+          <div style="font-size:15px;font-weight:700;">📥 Importar CSV — confira as colunas</div>
+          <div style="font-size:12px;color:var(--muted);">O arquivo não precisa seguir o modelo padrão. Escolha abaixo qual coluna do seu arquivo corresponde a cada campo — o app já tentou adivinhar.</div>
+
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer;">
+            <input type="checkbox" id="csv-tem-cabecalho" ${temCabecalho?"checked":""}/> A primeira linha do arquivo é um cabeçalho (nomes das colunas)
+          </label>
+
+          <div style="overflow-x:auto;border:1px solid var(--border-hi);border-radius:8px;">
+            <table style="width:100%;border-collapse:collapse;font-size:11px;white-space:nowrap;">
+              <thead><tr>${headers.map(h=>`<th style="padding:6px 8px;text-align:left;background:var(--bg2);border-bottom:1px solid var(--border-hi);">${esc(h)}</th>`).join("")}</tr></thead>
+              <tbody>${previewRows.map(r=>`<tr>${headers.map((_,i)=>`<td style="padding:6px 8px;border-bottom:1px solid var(--border);color:var(--muted);">${esc(r[i]??"")}</td>`).join("")}</tr>`).join("")}</tbody>
+            </table>
+          </div>
+          <div style="font-size:11px;color:var(--muted);">Pré-visualização — ${dados.length} linha${dados.length!==1?"s":""} de dados no total.</div>
+
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            ${CAMPOS_IMPORT_MERC.map(campo=>`
+              <div style="display:flex;align-items:center;gap:8px;">
+                <label style="flex:0 0 150px;font-size:12px;">${campo.label}${campo.obrigatorio?" *":""}</label>
+                <select data-campo="${campo.key}" style="flex:1;padding:7px 8px;background:var(--bg2);border:1px solid var(--border-hi);border-radius:6px;color:var(--text);font-family:var(--font);font-size:12px;">
+                  <option value="-1">— não importar —</option>
+                  ${headers.map((h,i)=>`<option value="${i}" ${mapping[campo.key]===i?"selected":""}>${esc(h)}</option>`).join("")}
+                </select>
+              </div>`).join("")}
+          </div>
+
+          <div style="display:flex;gap:10px;margin-top:4px;">
+            <button id="csv-map-cancelar" class="btn btn-secondary" style="flex:1;">Cancelar</button>
+            <button id="csv-map-confirmar" class="btn btn-primary" style="flex:1;">Importar</button>
+          </div>
+        </div>`;
+
+      mo.querySelector("#csv-tem-cabecalho").addEventListener("change",e=>{
+        temCabecalho=e.target.checked;
+        mapping=_guessMapeamentoCsv(getHeadersEDados().headers);
+        render();
+      });
+
+      mo.querySelectorAll("select[data-campo]").forEach(sel=>{
+        sel.addEventListener("change",()=>{ mapping[sel.getAttribute("data-campo")]=Number(sel.value); });
+      });
+
+      mo.querySelector("#csv-map-cancelar").addEventListener("click",()=>mo.remove());
+      mo.querySelector("#csv-map-confirmar").addEventListener("click",()=>{
+        // Ler seleção atual de cada select (garante valor mais recente)
+        mo.querySelectorAll("select[data-campo]").forEach(sel=>{ mapping[sel.getAttribute("data-campo")]=Number(sel.value); });
+        if(mapping.nome===-1){ toast("Selecione qual coluna é o Nome do produto.","warning"); return; }
+        const {dados}=getHeadersEDados();
+        const rows=dados.map(vals=>{
+          const obj={};
+          CAMPOS_IMPORT_MERC.forEach(campo=>{
+            const idx=mapping[campo.key];
+            obj[campo.key]=idx>=0?(vals[idx]??""):"";
+          });
+          return obj;
+        });
+        mo.remove();
+        onConfirm(rows);
+      });
+    };
+    render();
+  }
+
+
   // usuário (link wa.me em nova aba), pois navegadores bloqueiam abertura
   // automática de múltiplas abas sem interação direta.
   function abrirDisparoWhatsApp(destinatarios,tituloExtra){
