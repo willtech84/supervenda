@@ -677,19 +677,32 @@ export default {
           const itens: any[] = Array.isArray(body.itens) ? body.itens : [];
           if (!itens.length) return bad("Nenhum item enviado.", 400);
 
-          // Carrega existentes uma vez só, pra decidir insert vs update por nome (igual ao client antigo)
+          // Normaliza pra casar produtos mesmo com espaço duplo, acento diferente etc.
+          // (evita duplicar o mesmo produto ao reimportar um CSV com valores corrigidos)
+          const normKey = (s: any) => String(s ?? "")
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .replace(/\s+/g, " ").trim().toUpperCase();
+
+          // Carrega existentes uma vez só, pra decidir insert vs update por SKU (prioridade) ou nome
           const existentesRows = await env.DB.prepare(
-            `SELECT id, produto FROM ${table} WHERE vendor_id=?`
+            `SELECT id, produto, sku FROM ${table} WHERE vendor_id=?`
           ).bind(effectiveVendorId).all<any>();
           const existentesPorNome = new Map<string, string>();
+          const existentesPorSku = new Map<string, string>();
           for (const r of existentesRows.results || []) {
-            existentesPorNome.set(String(r.produto || "").toUpperCase(), r.id);
+            existentesPorNome.set(normKey(r.produto), r.id);
+            const skuKey = normKey(r.sku);
+            if (skuKey) existentesPorSku.set(skuKey, r.id);
           }
 
+          const acharIdExistente = (it: any): string | undefined => {
+            const skuKey = normKey(it.sku || it.codigo || "");
+            if (skuKey && existentesPorSku.has(skuKey)) return existentesPorSku.get(skuKey);
+            return existentesPorNome.get(normKey(it.produto || it.nome || ""));
+          };
+
           // Reserva um bloco de IDs de uma vez (evita N leituras sequenciais do counter)
-          const novosNecessarios = itens.filter(it =>
-            !existentesPorNome.has(String(it.produto || it.nome || "").toUpperCase())
-          ).length;
+          const novosNecessarios = itens.filter(it => !acharIdExistente(it)).length;
           let counterRow = await env.DB.prepare(
             "SELECT value FROM counters WHERE vendor_id=? AND kind='produto'"
           ).bind(effectiveVendorId).first<{ value: number }>();
@@ -707,12 +720,13 @@ export default {
           for (const it of itens) {
             const nomeProduto = String(it.produto || it.nome || "").trim();
             if (!nomeProduto) { erros++; continue; }
-            const nomeKey = nomeProduto.toUpperCase();
-            let id = existentesPorNome.get(nomeKey);
+            let id = acharIdExistente(it);
             if (!id) {
               nextCounter++;
               id = "PR" + String(nextCounter).padStart(5, "0");
-              existentesPorNome.set(nomeKey, id);
+              existentesPorNome.set(normKey(nomeProduto), id);
+              const skuKey = normKey(it.sku || it.codigo || "");
+              if (skuKey) existentesPorSku.set(skuKey, id);
             }
             stmts.push(env.DB.prepare(
               `INSERT INTO ${table}

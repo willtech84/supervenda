@@ -1061,6 +1061,27 @@
     });
     return mapping;
   }
+  const LS_KEY_CSV_MAP="sv_csv_ultimo_mapeamento";
+  function _salvarMapeamentoCsv(headers,mapping){
+    const porNome={};
+    CAMPOS_IMPORT_MERC.forEach(campo=>{ const idx=mapping[campo.key]; if(idx>=0) porNome[campo.key]=headers[idx]; });
+    try{ localStorage.setItem(LS_KEY_CSV_MAP,JSON.stringify(porNome)); }catch{}
+  }
+  function _carregarMapeamentoCsvSalvo(headers){
+    let salvo=null;
+    try{ salvo=JSON.parse(localStorage.getItem(LS_KEY_CSV_MAP)||"null"); }catch{}
+    if(!salvo) return null;
+    const norm=headers.map(_normStr); const mapping={}; let achouAlgum=false;
+    CAMPOS_IMPORT_MERC.forEach(campo=>{
+      const nomeSalvo=salvo[campo.key];
+      const idx=nomeSalvo?norm.indexOf(_normStr(nomeSalvo)):-1;
+      if(idx>=0){ mapping[campo.key]=idx; achouAlgum=true; } else mapping[campo.key]=-1;
+    });
+    return achouAlgum?mapping:null;
+  }
+  function _melhorMapeamentoCsv(headers){
+    return _carregarMapeamentoCsvSalvo(headers)||_guessMapeamentoCsv(headers);
+  }
   /**
    * linesSplit: array de arrays de strings (cada linha do CSV já dividida em colunas).
    * onConfirm(rows): recebe um array de objetos {nome,codigo,marca,categoria,valor_compra,valor_venda,estoque,estoqueMin,descricao}
@@ -1078,7 +1099,7 @@
       return {headers:Array.from({length:nCols},(_,i)=>`Coluna ${i+1}`), dados:linesSplit};
     };
 
-    let mapping=_guessMapeamentoCsv(getHeadersEDados().headers);
+    let mapping=_melhorMapeamentoCsv(getHeadersEDados().headers);
 
     const render=()=>{
       const {headers,dados}=getHeadersEDados();
@@ -1119,7 +1140,7 @@
 
       mo.querySelector("#csv-tem-cabecalho").addEventListener("change",e=>{
         temCabecalho=e.target.checked;
-        mapping=_guessMapeamentoCsv(getHeadersEDados().headers);
+        mapping=_melhorMapeamentoCsv(getHeadersEDados().headers);
         render();
       });
 
@@ -1132,7 +1153,8 @@
         // Ler seleção atual de cada select (garante valor mais recente)
         mo.querySelectorAll("select[data-campo]").forEach(sel=>{ mapping[sel.getAttribute("data-campo")]=Number(sel.value); });
         if(mapping.nome===-1){ toast("Selecione qual coluna é o Nome do produto.","warning"); return; }
-        const {dados}=getHeadersEDados();
+        const {headers,dados}=getHeadersEDados();
+        _salvarMapeamentoCsv(headers,mapping);
         const rows=dados.map(vals=>{
           const obj={};
           CAMPOS_IMPORT_MERC.forEach(campo=>{
