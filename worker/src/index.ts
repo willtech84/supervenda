@@ -534,6 +534,15 @@ export default {
         } catch {}
       }
 
+      // Helper: registrar exclusão para permitir sync incremental (fire-and-forget)
+      async function registrarExclusao(resource: string, itemId: string) {
+        try {
+          await env.DB.prepare(
+            `INSERT INTO exclusoes (vendor_id,resource,item_id,deleted_at) VALUES (?,?,?,?)`
+          ).bind(effectiveVendorId, resource, itemId, nowISO()).run();
+        } catch {}
+      }
+
       // Helper: checar permissão do usuário - NUNCA bloqueia por erro técnico
       async function temPermissao(recurso: string, acao: string): Promise<boolean> {
         try {
@@ -567,9 +576,12 @@ export default {
         if (!await temPermissao("clientes","ver")) return bad("Sem permissão para acessar clientes.", 403);
 
         if (req.method === "GET" && !p[2]) {
-          const rows = await env.DB.prepare(
-            "SELECT * FROM clientes WHERE vendor_id=? ORDER BY nome ASC"
-          ).bind(effectiveVendorId).all<any>();
+          const since = url.searchParams.get("since") || "";
+          let q = "SELECT * FROM clientes WHERE vendor_id=?";
+          const binds: any[] = [effectiveVendorId];
+          if (since) { q += " AND updated_at > ?"; binds.push(since); }
+          q += " ORDER BY nome ASC";
+          const rows = await env.DB.prepare(q).bind(...binds).all<any>();
           return json((rows.results || []).map((r: any) => ({ ...r, tags: parseJSONField(r.tags, []) })));
         }
 
@@ -663,6 +675,7 @@ export default {
           if (!await temPermissao("clientes","excluir")) return bad("Sem permissão para excluir clientes.", 403);
           await env.DB.prepare("DELETE FROM clientes WHERE id=? AND vendor_id=?")
             .bind(p[2], effectiveVendorId).run();
+          await registrarExclusao("clientes", p[2]);
           await logAtividade("excluir", "clientes", `Cliente ${p[2]} excluído`);
           return json({ ok: true });
         }
@@ -768,9 +781,12 @@ export default {
         const table = "produtos";
 
         if (req.method === "GET" && !p[2]) {
-          const rows = await env.DB.prepare(
-            `SELECT * FROM ${table} WHERE vendor_id=? ORDER BY produto ASC`
-          ).bind(effectiveVendorId).all<any>();
+          const since = url.searchParams.get("since") || "";
+          let q = `SELECT * FROM ${table} WHERE vendor_id=?`;
+          const binds: any[] = [effectiveVendorId];
+          if (since) { q += " AND updated_at > ?"; binds.push(since); }
+          q += " ORDER BY produto ASC";
+          const rows = await env.DB.prepare(q).bind(...binds).all<any>();
           return json(rows.results || []);
         }
 
@@ -854,6 +870,7 @@ export default {
         if (req.method === "DELETE" && p[2]) {
           await env.DB.prepare(`DELETE FROM ${table} WHERE id=? AND vendor_id=?`)
             .bind(p[2], effectiveVendorId).run();
+          await registrarExclusao("mercadorias", p[2]);
           return json({ ok: true });
         }
       }
@@ -862,9 +879,12 @@ export default {
       if (p[1] === "pedidos") {
         if (!await temPermissao("pedidos","ver")) return bad("Sem permissão para acessar pedidos.", 403);
         if (req.method === "GET" && !p[2]) {
-          const rows = await env.DB.prepare(
-            "SELECT * FROM pedidos WHERE vendor_id=? ORDER BY created_at DESC"
-          ).bind(effectiveVendorId).all<any>();
+          const since = url.searchParams.get("since") || "";
+          let q = "SELECT * FROM pedidos WHERE vendor_id=?";
+          const binds: any[] = [effectiveVendorId];
+          if (since) { q += " AND updated_at > ?"; binds.push(since); }
+          q += " ORDER BY created_at DESC";
+          const rows = await env.DB.prepare(q).bind(...binds).all<any>();
           return json((rows.results || []).map((r: any) => ({ ...r, itens: parseJSONField(r.itens, []) })));
         }
 
@@ -929,6 +949,7 @@ export default {
           if (!await temPermissao("pedidos","excluir")) return bad("Sem permissão para excluir pedidos.", 403);
           await env.DB.prepare("DELETE FROM pedidos WHERE id=? AND vendor_id=?")
             .bind(p[2], effectiveVendorId).run();
+          await registrarExclusao("pedidos", p[2]);
           await logAtividade("excluir", "pedidos", `Pedido ${p[2]} excluído`);
           return json({ ok: true });
         }
@@ -938,9 +959,12 @@ export default {
       if (p[1] === "despesas") {
         if (!await temPermissao("despesas","ver")) return bad("Sem permissão para acessar despesas.", 403);
         if (req.method === "GET" && !p[2]) {
-          const rows = await env.DB.prepare(
-            "SELECT * FROM despesas WHERE vendor_id=? ORDER BY data DESC, created_at DESC"
-          ).bind(effectiveVendorId).all<any>();
+          const since = url.searchParams.get("since") || "";
+          let q = "SELECT * FROM despesas WHERE vendor_id=?";
+          const binds: any[] = [effectiveVendorId];
+          if (since) { q += " AND updated_at > ?"; binds.push(since); }
+          q += " ORDER BY data DESC, created_at DESC";
+          const rows = await env.DB.prepare(q).bind(...binds).all<any>();
           return json(rows.results || []);
         }
 
@@ -989,6 +1013,7 @@ export default {
         if (req.method === "DELETE" && p[2]) {
           await env.DB.prepare("DELETE FROM despesas WHERE id=? AND vendor_id=?")
             .bind(p[2], effectiveVendorId).run();
+          await registrarExclusao("despesas", p[2]);
           return json({ ok: true });
         }
       }
@@ -996,9 +1021,12 @@ export default {
       /** =================== LEMBRETES =================== **/
       if (p[1] === "lembretes") {
         if (req.method === "GET" && !p[2]) {
-          const rows = await env.DB.prepare(
-            "SELECT * FROM lembretes WHERE vendor_id=? ORDER BY data ASC, created_at DESC"
-          ).bind(effectiveVendorId).all<any>();
+          const since = url.searchParams.get("since") || "";
+          let q = "SELECT * FROM lembretes WHERE vendor_id=?";
+          const binds: any[] = [effectiveVendorId];
+          if (since) { q += " AND updated_at > ?"; binds.push(since); }
+          q += " ORDER BY data ASC, created_at DESC";
+          const rows = await env.DB.prepare(q).bind(...binds).all<any>();
           return json(rows.results || []);
         }
 
@@ -1054,6 +1082,7 @@ export default {
         if (req.method === "DELETE" && p[2]) {
           await env.DB.prepare("DELETE FROM lembretes WHERE id=? AND vendor_id=?")
             .bind(p[2], effectiveVendorId).run();
+          await registrarExclusao("lembretes", p[2]);
           return json({ ok: true });
         }
       }
@@ -1061,9 +1090,12 @@ export default {
       /** =================== ROTAS =================== **/
       if (p[1] === "rotas") {
         if (req.method === "GET" && !p[2]) {
-          const rows = await env.DB.prepare(
-            "SELECT * FROM rotas WHERE vendor_id=? ORDER BY data DESC"
-          ).bind(effectiveVendorId).all<any>();
+          const since = url.searchParams.get("since") || "";
+          let q = "SELECT * FROM rotas WHERE vendor_id=?";
+          const binds: any[] = [effectiveVendorId];
+          if (since) { q += " AND updated_at > ?"; binds.push(since); }
+          q += " ORDER BY data DESC";
+          const rows = await env.DB.prepare(q).bind(...binds).all<any>();
           return json((rows.results || []).map((r: any) => ({ ...r, paradas: parseJSONField(r.paradas, []) })));
         }
 
@@ -1107,7 +1139,24 @@ export default {
         if (req.method === "DELETE" && p[2]) {
           await env.DB.prepare("DELETE FROM rotas WHERE id=? AND vendor_id=?")
             .bind(p[2], effectiveVendorId).run();
+          await registrarExclusao("rotas", p[2]);
           return json({ ok: true });
+        }
+      }
+
+      /** =================== EXCLUSÕES (sync incremental) =================== **/
+      if (p[1] === "exclusoes") {
+        if (req.method === "GET") {
+          const since = url.searchParams.get("since") || "";
+          if (!since) return json({});
+          const rows = await env.DB.prepare(
+            "SELECT resource, item_id FROM exclusoes WHERE vendor_id=? AND deleted_at > ?"
+          ).bind(effectiveVendorId, since).all<any>();
+          const porRecurso: Record<string, string[]> = {};
+          for (const r of rows.results || []) {
+            (porRecurso[r.resource] ||= []).push(r.item_id);
+          }
+          return json(porRecurso);
         }
       }
 

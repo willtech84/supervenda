@@ -318,6 +318,29 @@
     if (Array.isArray(data?.rows)) return data.rows;
     return [];
   }
+  // Sync incremental: busca só o que mudou desde `since` (ISO). Sem `since`, equivale a list().
+  async function listSince(resource, since) {
+    const paths = getResourcePaths(resource).map(p => since ? `${p}?since=${encodeURIComponent(since)}` : p);
+    const { data } = await requestAny(paths, { method: 'GET' });
+    if (data === null) {
+      const err = new Error('Falha de rede ao carregar dados.');
+      err.network = true;
+      throw err;
+    }
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.items)) return data.items;
+    if (Array.isArray(data?.data)) return data.data;
+    if (Array.isArray(data?.rows)) return data.rows;
+    return [];
+  }
+  // Retorna { recurso: [ids excluídos] } desde `since`. Sem `since`, retorna {}.
+  async function listExclusoes(since) {
+    if (!since) return {};
+    try {
+      const { data } = await request((ENDPOINTS.exclusoes || '/api/exclusoes') + `?since=${encodeURIComponent(since)}`, { method: 'GET' });
+      return (data && typeof data === 'object') ? data : {};
+    } catch (e) { return {}; }
+  }
   async function create(resource, payload) {
     const { data } = await requestAny(getResourcePaths(resource), {
       method: 'POST', body: JSON.stringify(payload || {}),
@@ -339,7 +362,7 @@
     getToken, setToken, getUser, setUser, clearSession,
     request, health, login, register, me, bootstrap,
     listUsers, createUser, updateUser,
-    list, create, update, remove, backup,
+    list, listSince, listExclusoes, create, update, remove, backup,
     processQueue, // expor para uso externo
   };
 })();

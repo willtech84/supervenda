@@ -17,6 +17,7 @@
     cache: { clientes:[], mercadorias:[], pedidos:[], rotas:[], despesas:[], lembretes:[], notas:[] },
     ui: { search: "" },
     lembretesPopupShown: false,
+    _syncMeta: {}, // { [recurso]: { since: iso, ciclos: n } }
   };
 
   const $ = (sel, root=document) => root.querySelector(sel);
@@ -265,15 +266,50 @@
     panel.querySelector("#popup-ver")?.addEventListener("click",()=>{overlay.remove();navigate("lembretes");});
   }
 
+  // Recursos com suporte a sync incremental no backend (?since= + tabela de exclusões)
+  const RECURSOS_INCREMENTAIS = new Set(["clientes","mercadorias","pedidos","rotas","despesas","lembretes"]);
+  const CICLOS_ANTES_FULL_RESYNC = 20; // a cada N syncs incrementais, faz um full-load de segurança
+
+  function upsertPorId(lista, itens){
+    if(!itens.length) return lista;
+    const porId=new Map(lista.map(it=>[String(it.id), it]));
+    for(const it of itens) porId.set(String(it.id), it);
+    return Array.from(porId.values());
+  }
+  function removerPorId(lista, ids){
+    if(!ids||!ids.length) return lista;
+    const remover=new Set(ids.map(String));
+    return lista.filter(it=>!remover.has(String(it.id)));
+  }
+
   // Data
   async function loadResource(resource){
     const apiKey=resource==="anotacoes"?"notas":resource;
     const cacheKey=resource==="anotacoes"?"notas":resource;
     // Garantir que cache sempre começa como array mesmo em erro
     if(!Array.isArray(state.cache[cacheKey])) state.cache[cacheKey]=[];
+    const meta=state._syncMeta[cacheKey]||(state._syncMeta[cacheKey]={since:null,ciclos:0});
+    const podeIncremental = RECURSOS_INCREMENTAIS.has(apiKey) && meta.since && state.cache[cacheKey].length>0 && meta.ciclos<CICLOS_ANTES_FULL_RESYNC;
     try{
-      const items=await DB.list(apiKey);
-      state.cache[cacheKey]=safeArray(items);
+      if(podeIncremental){
+        const marcaTempo=new Date(Date.now()-5000).toISOString(); // 5s de folga contra clock skew
+        const [novos, exclusoes]=await Promise.all([
+          DB.listSince(apiKey, meta.since),
+          DB.listExclusoes(meta.since),
+        ]);
+        let lista=upsertPorId(state.cache[cacheKey], safeArray(novos));
+        const idsExcluidos=exclusoes?.[apiKey];
+        if(idsExcluidos) lista=removerPorId(lista, idsExcluidos);
+        state.cache[cacheKey]=lista;
+        meta.since=marcaTempo;
+        meta.ciclos++;
+      } else {
+        const marcaTempo=new Date(Date.now()-5000).toISOString();
+        const items=await DB.list(apiKey);
+        state.cache[cacheKey]=safeArray(items);
+        meta.since=marcaTempo;
+        meta.ciclos=0;
+      }
     }catch(e){
       // 403 = sem permissão, manter cache como [] silenciosamente
       if(e?.status===403||String(e?.message||"").includes("permiss")){
@@ -6661,7 +6697,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
       }catch{}
     });
 
-    // 2. Polling a cada 90s — nunca re-renderiza com form aberto
+    // 2. Polling a cada 5min (era 90s — causava excesso de leituras no D1) — nunca re-renderiza com form aberto
     setInterval(async()=>{
       if(document.hidden||!DB.getToken()||window._svFormAberto()) return;
       ultimoSync=Date.now();
@@ -6674,7 +6710,7 @@ Esta ação não pode ser desfeita. Confirme digitando o nome:`;
         if(!window._svFormAberto()) renderCurrent();
         Promise.allSettled(recursos.slice(1).map(r=>loadResource(r)));
       }catch{}
-    },90000);
+    },300000);
 
     // 3. Sync manual pelo botão ⟳
     function mostrarIndicadorSync(){
