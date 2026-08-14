@@ -145,7 +145,16 @@
   function setToken(t) { if (t) localStorage.setItem(KEYS.TOKEN, t); else localStorage.removeItem(KEYS.TOKEN); }
   function getUser() { try { return JSON.parse(localStorage.getItem(KEYS.USER) || 'null'); } catch { return null; } }
   function setUser(u) { if (u) localStorage.setItem(KEYS.USER, JSON.stringify(u)); else localStorage.removeItem(KEYS.USER); }
-  function clearSession() { setToken(''); setUser(null); }
+  function clearSession() {
+    setToken(''); setUser(null);
+    // Limpa cache de sync incremental (evita vazar dados de um vendedor pro próximo login no mesmo aparelho)
+    try{
+      for(let i=localStorage.length-1;i>=0;i--){
+        const k=localStorage.key(i);
+        if(k && k.startsWith('sv_synccache_')) localStorage.removeItem(k);
+      }
+    }catch{}
+  }
 
   function apiBase() {
     const b = (window.CONFIG && window.CONFIG.API_BASE) || localStorage.getItem(KEYS.API_BASE) || '';

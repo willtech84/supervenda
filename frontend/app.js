@@ -269,6 +269,31 @@
   // Recursos com suporte a sync incremental no backend (?since= + tabela de exclusões)
   const RECURSOS_INCREMENTAIS = new Set(["clientes","mercadorias","pedidos","rotas","despesas","lembretes"]);
   const CICLOS_ANTES_FULL_RESYNC = 20; // a cada N syncs incrementais, faz um full-load de segurança
+  const LS_SYNC_PREFIX = "sv_synccache_"; // persiste cache+since entre aberturas do app (não só entre polls)
+  let _syncCacheCarregado = false;
+
+  function carregarCacheSyncDoDisco(){
+    if(_syncCacheCarregado) return;
+    _syncCacheCarregado = true;
+    for(const recurso of Object.keys(state.cache)){
+      try{
+        const raw=localStorage.getItem(LS_SYNC_PREFIX+recurso);
+        if(!raw) continue;
+        const parsed=JSON.parse(raw);
+        if(Array.isArray(parsed?.itens)){
+          state.cache[recurso]=parsed.itens;
+          state._syncMeta[recurso]={since:parsed.since||null, ciclos:0};
+        }
+      }catch{}
+    }
+  }
+  function salvarCacheSyncNoDisco(recurso){
+    try{
+      const meta=state._syncMeta[recurso];
+      if(!meta?.since) return;
+      localStorage.setItem(LS_SYNC_PREFIX+recurso, JSON.stringify({since:meta.since, itens:state.cache[recurso]||[]}));
+    }catch{ /* quota cheia ou privado — segue sem persistir, incremental ainda funciona na sessão */ }
+  }
 
   function upsertPorId(lista, itens){
     if(!itens.length) return lista;
@@ -284,6 +309,7 @@
 
   // Data
   async function loadResource(resource){
+    carregarCacheSyncDoDisco();
     const apiKey=resource==="anotacoes"?"notas":resource;
     const cacheKey=resource==="anotacoes"?"notas":resource;
     // Garantir que cache sempre começa como array mesmo em erro
@@ -310,6 +336,7 @@
         meta.since=marcaTempo;
         meta.ciclos=0;
       }
+      if(RECURSOS_INCREMENTAIS.has(apiKey)) salvarCacheSyncNoDisco(cacheKey);
     }catch(e){
       // 403 = sem permissão, manter cache como [] silenciosamente
       if(e?.status===403||String(e?.message||"").includes("permiss")){
