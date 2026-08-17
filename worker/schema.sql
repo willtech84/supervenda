@@ -129,4 +129,13 @@ CREATE INDEX IF NOT EXISTS idx_pedidos_vendor  ON pedidos(vendor_id);
 CREATE INDEX IF NOT EXISTS idx_despesas_vendor  ON despesas(vendor_id);
 CREATE INDEX IF NOT EXISTS idx_lembretes_vendor ON lembretes(vendor_id);
 CREATE INDEX IF NOT EXISTS idx_rotas_vendor ON rotas(vendor_id);
+
+-- Índices compostos para sync incremental (WHERE vendor_id=? AND updated_at > ?)
+-- sem eles, o índice simples em vendor_id não evita escanear todas as linhas do vendor
+CREATE INDEX IF NOT EXISTS idx_clientes_vendor_updated   ON clientes(vendor_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_produtos_vendor_updated   ON produtos(vendor_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_pedidos_vendor_updated    ON pedidos(vendor_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_despesas_vendor_updated   ON despesas(vendor_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_lembretes_vendor_updated  ON lembretes(vendor_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_rotas_vendor_updated      ON rotas(vendor_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_notas_vendor ON notas(vendor_id);
