@@ -821,6 +821,7 @@
             ${cidadesClientes.map(c=>`<option value="${esc(c)}" ${state._cliCidade===c?"selected":""}>${esc(c)}</option>`).join("")}
           </select>
           <button id="cli-disparo-btn" class="btn btn-secondary" style="font-size:12px;background:rgba(37,211,102,.12);border-color:rgba(37,211,102,.35);color:#25d366;">📢 Disparar mensagem</button>
+          <button id="cli-export-btn" class="btn btn-secondary" style="font-size:12px;">📤 Exportar CSV</button>
         </div>`:""}
         ${resource==="rotas"?`
         <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center;">
@@ -904,6 +905,18 @@
         const cnt=$("#sv-count");
         if(cnt) cnt.textContent=`${f.length} registro${f.length!==1?"s":""}`;
         doRenderList(f);
+      });
+      // Exportar clientes em CSV (respeita filtro de cidade e busca atuais)
+      $("#cli-export-btn")?.addEventListener("click",()=>{
+        const items=getFiltered();
+        if(!items.length){toast("Nenhum cliente para exportar.","warning");return;}
+        const cols=[["nome","Nome"],["telefone","Telefone"],["email","E-mail"],["cidade","Cidade"],["endereco","Endereço"],["bairro","Bairro"],["cep","CEP"],["cpfcnpj","CPF/CNPJ"],["pagamentoPadrao","Pagamento padrão"],["obs","Observação"]];
+        const cel=v=>{const t=String(v??"").replace(/\r?\n/g," ").trim();return /[;"]/.test(t)?`"${t.replace(/"/g,'""')}"`:t;};
+        const csv="\uFEFF"+[cols.map(c=>c[1]).join(";"),...items.map(it=>cols.map(c=>cel(it[c[0]])).join(";"))].join("\r\n");
+        const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+        const a=Object.assign(document.createElement("a"),{href:URL.createObjectURL(blob),download:`clientes_${new Date().toISOString().slice(0,10)}.csv`});
+        document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+        toast(`✅ ${items.length} cliente${items.length!==1?"s":""} exportado${items.length!==1?"s":""}.`,"success");
       });
       $("#cli-disparo-btn")?.addEventListener("click",()=>{
         const alvos=getFiltered().map(it=>({nome:it.nome,telefone:it.telefone,cidade:it.cidade}));
