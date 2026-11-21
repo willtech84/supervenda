@@ -13,6 +13,7 @@ head_sampling_rate = 1
 binding = "DB"
 database_name = "vendas_pro"
 database_id = "102413e6-5a14-4668-97e9-4a66ad5e58ea"
+migrations_dir = "migrations"
 
 # ── R2 Bucket para backups ───────────────────────────────────────
 # Crie o bucket no Cloudflare > R2 com o nome "supervenda-backups"
