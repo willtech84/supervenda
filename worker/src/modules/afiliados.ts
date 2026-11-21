@@ -157,7 +157,7 @@ export async function handleAfiliados(
     }
 
     if (req.method === "POST" && path.length === 3) {
-      const body = await req.json<ProdutoInput>().catch(() => ({} as ProdutoInput));
+      const body = (await req.json().catch(() => ({}))) as ProdutoInput;
       const produto = normalize(body);
       if (!produto) {
         return error("Dados inválidos. Informe nome, categoria, URL válida e valores dentro dos limites.");
@@ -204,7 +204,7 @@ export async function handleAfiliados(
         return response({ ok: true, id });
       }
 
-      const body = await req.json<ProdutoInput>().catch(() => ({} as ProdutoInput));
+      const body = (await req.json().catch(() => ({}))) as ProdutoInput;
       const produto = normalize(body, current);
       if (!produto) return error("Dados inválidos. Revise os campos e os valores informados.");
 
