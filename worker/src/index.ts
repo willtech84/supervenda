@@ -1,3 +1,5 @@
+import { handleAfiliados } from "./modules/afiliados";
+
 export interface Env {
   DB: D1Database;
   BACKUPS?: R2Bucket;
@@ -377,6 +379,12 @@ export default {
           ).bind(vendorId).first<any>();
           if (vRow?.owner_id) effectiveVendorId = vRow.owner_id;
         } catch { /* coluna pode não existir ainda, usar próprio id */ }
+      }
+
+      // Módulo isolado de afiliados: usa a identidade resolvida pelo JWT.
+      if (p[1] === "afiliados") {
+        const afiliadosResponse = await handleAfiliados(req, env, p, effectiveVendorId);
+        if (afiliadosResponse) return afiliadosResponse;
       }
 
       // Me
